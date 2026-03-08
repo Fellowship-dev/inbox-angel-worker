@@ -27,6 +27,7 @@ export interface Domain {
   spf_record: string | null;
   dkim_configured: 0 | 1;
   auth_record_provisioned: 0 | 1;
+  dns_record_id: string | null;  // Cloudflare DNS record ID for deprovision
   created_at: number;
   updated_at: number;
 }

@@ -10,6 +10,7 @@ export interface Env {
   CLOUDFLARE_ACCOUNT_ID: string;
   CLOUDFLARE_ZONE_ID: string;
   CLOUDFLARE_API_TOKEN: string; // secret
+  REPORTS_DOMAIN: string;       // e.g. "reports.inboxangel.io" — used for RUA addresses + DNS provisioning
   FROM_EMAIL: string;
 }
 

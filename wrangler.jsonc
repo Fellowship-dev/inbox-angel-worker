@@ -17,7 +17,7 @@
 		}
 	],
 
-	// Email Worker — handles *.reports.inboxangel.com
+	// Email Worker — handles *.reports.inboxangel.io
 	"email": [
 		{
 			"name": "EMAIL"
@@ -27,9 +27,10 @@
 	// Environment variables (secrets set via wrangler secret put)
 	"vars": {
 		"AUTH0_DOMAIN": "",
-		"AUTH0_AUDIENCE": "https://api.inboxangel.com",
+		"AUTH0_AUDIENCE": "https://api.inboxangel.io",
 		"CLOUDFLARE_ACCOUNT_ID": "",
 		"CLOUDFLARE_ZONE_ID": "",
-		"FROM_EMAIL": "reports@inboxangel.com"
+		"REPORTS_DOMAIN": "reports.inboxangel.io",
+		"FROM_EMAIL": "check@reports.inboxangel.io"
 	}
 }

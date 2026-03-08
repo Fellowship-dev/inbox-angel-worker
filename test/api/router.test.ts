@@ -10,8 +10,18 @@ vi.mock('../../src/api/auth', () => ({
   },
 }));
 
+// Mock DNS provisioning so router tests don't hit Cloudflare
+vi.mock('../../src/dns/provision', () => ({
+  provisionDomain: vi.fn().mockResolvedValue({ recordId: 'cf-rec-1', recordName: 'acme.com._report._dmarc.reports.inboxangel.io' }),
+  deprovisionDomain: vi.fn().mockResolvedValue(undefined),
+  DnsProvisionError: class DnsProvisionError extends Error {
+    constructor(msg: string) { super(msg); this.name = 'DnsProvisionError'; }
+  },
+}));
+
 import { handleApi } from '../../src/api/router';
 import * as authMod from '../../src/api/auth';
+import * as dnsMod from '../../src/dns/provision';
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -135,7 +145,7 @@ describe('POST /api/domains', () => {
     expect(res.status).toBe(201);
     const body = await res.json() as any;
     expect(body.domain).toBe('acme.com');
-    expect(body.rua_address).toContain('@reports.inboxangel.com');
+    expect(body.rua_address).toContain('@reports.inboxangel.io');
   });
 
   it('lowercases and trims the domain', async () => {
@@ -178,7 +188,21 @@ describe('POST /api/domains', () => {
   it('derives rua_address from customerId + domain slug', async () => {
     const res = await handleApi(req('POST', '/api/domains', { domain: 'my-company.io' }), makeEnv(), ctx);
     const body = await res.json() as any;
-    expect(body.rua_address).toBe('org_test-my-company-io@reports.inboxangel.com');
+    expect(body.rua_address).toBe('org_test-my-company-io@reports.inboxangel.io');
+  });
+
+  it('returns 502 when DNS provisioning fails', async () => {
+    vi.mocked(dnsMod.provisionDomain).mockRejectedValueOnce(
+      new dnsMod.DnsProvisionError('Cloudflare rejected DNS record creation: auth error')
+    );
+    const res = await handleApi(req('POST', '/api/domains', { domain: 'acme.com' }), makeEnv(), ctx);
+    expect(res.status).toBe(502);
+  });
+
+  it('includes auth_record in the 201 response', async () => {
+    const res = await handleApi(req('POST', '/api/domains', { domain: 'acme.com' }), makeEnv(), ctx);
+    const body = await res.json() as any;
+    expect(body.auth_record).toContain('_report._dmarc.');
   });
 });
 
@@ -187,10 +211,10 @@ describe('POST /api/domains', () => {
 describe('DELETE /api/domains/:id', () => {
   it('returns 204 when domain is owned by customer', async () => {
     const env = makeEnv();
-    const domain: Partial<Domain> = { id: 5, domain: 'acme.com', customer_id: 'org_test' };
+    const domain: Partial<Domain> = { id: 5, domain: 'acme.com', customer_id: 'org_test', dns_record_id: null };
     (env.DB.prepare as any)
-      .mockReturnValueOnce({ // getDomainsByCustomer
-        bind: vi.fn().mockReturnValue({ all: vi.fn().mockResolvedValue({ results: [domain] }) }),
+      .mockReturnValueOnce({ // getDomainById
+        bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(domain) }),
       })
       .mockReturnValueOnce({ // DELETE
         bind: vi.fn().mockReturnValue({ run: vi.fn().mockResolvedValue({ success: true }) }),
@@ -199,8 +223,29 @@ describe('DELETE /api/domains/:id', () => {
     expect(res.status).toBe(204);
   });
 
+  it('calls deprovisionDomain when dns_record_id is set', async () => {
+    const env = makeEnv();
+    const domain: Partial<Domain> = { id: 5, domain: 'acme.com', customer_id: 'org_test', dns_record_id: 'cf-rec-abc' };
+    (env.DB.prepare as any)
+      .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(domain) }) })
+      .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ run: vi.fn().mockResolvedValue({ success: true }) }) });
+    await handleApi(req('DELETE', '/api/domains/5'), env, ctx);
+    expect(dnsMod.deprovisionDomain).toHaveBeenCalledWith(expect.anything(), 'cf-rec-abc');
+  });
+
   it('returns 404 when domain does not belong to customer', async () => {
-    const env = makeEnv(); // DB returns empty results → not found
+    // getDomainById returns a domain owned by someone else
+    const env = makeEnv();
+    const otherDomain: Partial<Domain> = { id: 99, domain: 'other.com', customer_id: 'org_other' };
+    (env.DB.prepare as any).mockReturnValueOnce({
+      bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(otherDomain) }),
+    });
+    const res = await handleApi(req('DELETE', '/api/domains/99'), env, ctx);
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 404 when domain not found', async () => {
+    const env = makeEnv(); // first() returns null by default
     const res = await handleApi(req('DELETE', '/api/domains/99'), env, ctx);
     expect(res.status).toBe(404);
   });

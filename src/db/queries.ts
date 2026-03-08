@@ -25,10 +25,21 @@ export function getDomainByAddress(db: D1Database, ruaAddress: string) {
   return db.prepare('SELECT * FROM domains WHERE rua_address = ?').bind(ruaAddress).first<Domain>();
 }
 
+export function getDomainById(db: D1Database, id: number) {
+  return db.prepare('SELECT * FROM domains WHERE id = ?').bind(id).first<Domain>();
+}
+
 export function insertDomain(db: D1Database, d: Pick<Domain, 'customer_id' | 'domain' | 'rua_address'>) {
   return db.prepare(`
     INSERT INTO domains (customer_id, domain, rua_address) VALUES (?, ?, ?)
   `).bind(d.customer_id, d.domain, d.rua_address).run();
+}
+
+export function updateDomainDnsRecord(db: D1Database, domainId: number, recordId: string) {
+  return db.prepare(`
+    UPDATE domains SET dns_record_id = ?, auth_record_provisioned = 1, updated_at = unixepoch()
+    WHERE id = ?
+  `).bind(recordId, domainId).run();
 }
 
 // ── Check Results ────────────────────────────────────────────

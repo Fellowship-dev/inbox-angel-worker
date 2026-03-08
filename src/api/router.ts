@@ -15,9 +15,12 @@ import { Env } from '../index';
 import { requireAuth, AuthError } from './auth';
 import {
   getDomainsByCustomer,
+  getDomainById,
   insertDomain,
+  updateDomainDnsRecord,
   getRecentReports,
 } from '../db/queries';
+import { provisionDomain, deprovisionDomain, DnsProvisionError } from '../dns/provision';
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -60,31 +63,60 @@ async function addDomain(request: Request, env: Env, customerId: string): Promis
 
   // RUA address derived from customer ID + domain slug (unique per domain)
   const slug = domain.replace(/\./g, '-');
-  const ruaAddress = `${customerId}-${slug}@reports.inboxangel.com`;
+  const reportsDomain = env.REPORTS_DOMAIN || 'reports.inboxangel.io';
+  const ruaAddress = `${customerId}-${slug}@${reportsDomain}`;
 
+  // Provision the cross-domain DMARC authorization record first.
+  // If CF fails we bail before touching the DB — no orphaned rows.
+  let provision: { recordId: string; recordName: string } | null = null;
   try {
-    await insertDomain(env.DB, { customer_id: customerId, domain, rua_address: ruaAddress });
+    provision = await provisionDomain(env, domain);
+  } catch (e) {
+    if (e instanceof DnsProvisionError) {
+      console.error('DNS provision failed:', e.message);
+      return err('DNS provisioning failed — check Cloudflare credentials', 502);
+    }
+    throw e;
+  }
+
+  // Insert domain row
+  let domainId: number;
+  try {
+    const result = await insertDomain(env.DB, { customer_id: customerId, domain, rua_address: ruaAddress });
+    domainId = result.meta.last_row_id as number;
   } catch (e: any) {
-    // UNIQUE(customer_id, domain) violation
+    // Rollback: clean up the DNS record we just created
+    if (provision) await deprovisionDomain(env, provision.recordId).catch(() => {});
     if (e?.message?.includes('UNIQUE')) return err('domain already registered', 409);
     throw e;
   }
 
-  return json({ domain, rua_address: ruaAddress }, 201);
+  // Record the CF DNS record ID for future cleanup
+  await updateDomainDnsRecord(env.DB, domainId, provision.recordId).catch(e =>
+    console.warn('updateDomainDnsRecord failed (non-fatal):', e)
+  );
+
+  return json({ domain, rua_address: ruaAddress, auth_record: provision.recordName }, 201);
 }
 
 async function deleteDomain(env: Env, customerId: string, domainId: string): Promise<Response> {
   const id = parseInt(domainId, 10);
   if (isNaN(id)) return err('invalid domain id', 400);
 
-  // Verify ownership before deleting
-  const { results } = await getDomainsByCustomer(env.DB, customerId);
-  const owned = results.find(d => d.id === id);
-  if (!owned) return err('domain not found', 404);
+  // Verify ownership and fetch the DNS record ID in one query
+  const domain = await getDomainById(env.DB, id);
+  if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
 
   await env.DB.prepare('DELETE FROM domains WHERE id = ? AND customer_id = ?')
     .bind(id, customerId)
     .run();
+
+  // Best-effort cleanup of the CF DNS record (non-fatal if it fails)
+  if (domain.dns_record_id) {
+    await deprovisionDomain(env, domain.dns_record_id).catch(e =>
+      console.warn(`deprovisionDomain failed for domain ${id}:`, e)
+    );
+  }
 
   return new Response(null, { status: 204 });
 }
