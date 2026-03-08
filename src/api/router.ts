@@ -6,14 +6,15 @@
 //   GET  /health                          — liveness probe (unauthenticated)
 //   POST /api/check-sessions              — create a free-check session (unauthenticated)
 //   GET  /api/check-sessions/:token       — poll for free-check result (unauthenticated)
-//   POST /api/bootstrap                   — first-time customer + domain setup (API_KEY required)
-//   GET  /api/bootstrap                   — check bootstrap state (API_KEY required)
 //   GET  /api/domains                     — list customer's monitored domains
 //   POST /api/domains                     — add a domain
 //   DELETE /api/domains/:id               — remove a domain
 //   GET  /api/reports                     — list recent aggregate reports
 //   GET  /api/reports/:id                 — single report with per-IP records
 //   GET  /api/check-results               — recent free check results (last 20)
+//
+// Self-hosted lazy init: if CUSTOMER_DOMAIN env var is set and no customer exists yet,
+// the first authenticated request auto-provisions customer + domain (no bootstrap call needed).
 
 import { Env } from '../index';
 import { requireAuth, AuthError } from './auth';
@@ -28,6 +29,7 @@ import {
   insertMonitorSubscription,
   upsertCustomer,
 } from '../db/queries';
+import type { DnsProvisionResult } from '../dns/provision';
 import { provisionDomain, deprovisionDomain, DnsProvisionError } from '../dns/provision';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -74,9 +76,10 @@ async function addDomain(request: Request, env: Env, customerId: string): Promis
   const slug = domain.replace(/\./g, '-');
   const ruaAddress = `${customerId}-${slug}@${env.REPORTS_DOMAIN}`;
 
-  // Provision the cross-domain DMARC authorization record first.
-  // If CF fails we bail before touching the DB — no orphaned rows.
-  let provision: { recordId: string; recordName: string } | null = null;
+  // Provision the cross-domain DMARC authorization record.
+  // If CF creds are absent, returns manual mode — caller gets instructions instead of auto-record.
+  // If CF creds present but API fails, bail before touching the DB.
+  let provision: DnsProvisionResult;
   try {
     provision = await provisionDomain(env, domain);
   } catch (e) {
@@ -93,18 +96,25 @@ async function addDomain(request: Request, env: Env, customerId: string): Promis
     const result = await insertDomain(env.DB, { customer_id: customerId, domain, rua_address: ruaAddress });
     domainId = result.meta.last_row_id as number;
   } catch (e: any) {
-    // Rollback: clean up the DNS record we just created
-    if (provision) await deprovisionDomain(env, provision.recordId).catch(() => {});
+    // Rollback: clean up the DNS record we just created (no-op in manual mode)
+    if (provision.recordId) await deprovisionDomain(env, provision.recordId).catch(() => {});
     if (e?.message?.includes('UNIQUE')) return err('domain already registered', 409);
     throw e;
   }
 
-  // Record the CF DNS record ID for future cleanup
-  await updateDomainDnsRecord(env.DB, domainId, provision.recordId).catch(e =>
-    console.warn('updateDomainDnsRecord failed (non-fatal):', e)
-  );
+  // Record the CF DNS record ID for future cleanup (only when auto-provisioned)
+  if (provision.recordId) {
+    await updateDomainDnsRecord(env.DB, domainId, provision.recordId).catch(e =>
+      console.warn('updateDomainDnsRecord failed (non-fatal):', e)
+    );
+  }
 
-  return json({ domain, rua_address: ruaAddress, auth_record: provision.recordName }, 201);
+  const response: Record<string, unknown> = { domain, rua_address: ruaAddress, auth_record: provision.recordName };
+  if (provision.manual) {
+    response.manual_dns = true;
+    response.instructions = `Add this TXT record to authorize DMARC reports:\n  ${provision.recordName}  TXT  "v=DMARC1;"`;
+  }
+  return json(response, 201);
 }
 
 async function deleteDomain(env: Env, customerId: string, domainId: string): Promise<Response> {
@@ -154,47 +164,47 @@ async function getReport(env: Env, customerId: string, reportId: string): Promis
   return json({ report, records });
 }
 
-async function bootstrap(request: Request, env: Env, customerId: string): Promise<Response> {
-  if (!env.REPORTS_DOMAIN) return err('REPORTS_DOMAIN is not configured', 500);
+// ── Self-hosted lazy init ──────────────────────────────────────
+// When CUSTOMER_DOMAIN env var is set and no customer/domain exists yet,
+// auto-provision on the first authenticated request — no bootstrap API call needed.
 
-  // Check if already bootstrapped — return existing config
-  const { results: existing } = await getDomainsByCustomer(env.DB, customerId);
-  if (existing.length > 0) {
-    const d = existing[0];
-    return json({ bootstrapped: false, customer_id: customerId, domain: d.domain, rua_address: d.rua_address });
+async function ensureCustomerExists(env: Env, customerId: string): Promise<void> {
+  if (!env.CUSTOMER_DOMAIN) return; // hosted/multi-tenant mode — nothing to auto-init
+
+  const { results } = await getDomainsByCustomer(env.DB, customerId);
+  if (results.length > 0) return; // already set up
+
+  const domain = env.CUSTOMER_DOMAIN.toLowerCase().trim();
+  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) {
+    console.warn('[init] CUSTOMER_DOMAIN is invalid, skipping auto-provision:', domain);
+    return;
   }
-
-  // First run — create customer + domain
-  const body = await parseBody<{ domain?: string; name?: string; email?: string }>(request);
-  if (!body.domain || typeof body.domain !== 'string') return err('domain is required', 400);
-
-  const domain = body.domain.toLowerCase().trim();
-  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/.test(domain)) return err('invalid domain format', 400);
+  if (!env.REPORTS_DOMAIN) {
+    console.warn('[init] REPORTS_DOMAIN is not set, skipping auto-provision');
+    return;
+  }
 
   await upsertCustomer(env.DB, {
     id: customerId,
-    name: body.name?.trim() || 'Self-hosted',
-    email: body.email?.trim() || env.FROM_EMAIL,
+    name: env.CUSTOMER_NAME?.trim() || 'Self-hosted',
+    email: env.CUSTOMER_EMAIL?.trim() || env.FROM_EMAIL,
     plan: 'self-hosted',
   });
 
   const slug = domain.replace(/\./g, '-');
   const ruaAddress = `${customerId}-${slug}@${env.REPORTS_DOMAIN}`;
+  const provision = await provisionDomain(env, domain);
+  const result = await insertDomain(env.DB, { customer_id: customerId, domain, rua_address: ruaAddress });
 
-  // Provision DNS authorization record
-  let authRecord: string | null = null;
-  try {
-    const provision = await provisionDomain(env, domain);
-    authRecord = provision.recordName;
-
-    const result = await insertDomain(env.DB, { customer_id: customerId, domain, rua_address: ruaAddress });
+  if (provision.recordId) {
     await updateDomainDnsRecord(env.DB, result.meta.last_row_id as number, provision.recordId).catch(() => {});
-  } catch (e) {
-    if (e instanceof DnsProvisionError) return err('DNS provisioning failed — check CLOUDFLARE_API_TOKEN and CLOUDFLARE_ZONE_ID', 502);
-    throw e;
   }
 
-  return json({ bootstrapped: true, customer_id: customerId, domain, rua_address: ruaAddress, auth_record: authRecord }, 201);
+  if (provision.manual) {
+    console.log(`[init] Domain provisioned. Add this DNS record manually:\n  ${provision.recordName}  TXT  "v=DMARC1;"`);
+  } else {
+    console.log(`[init] Domain provisioned with DNS record: ${provision.recordName}`);
+  }
 }
 
 async function getCheckResults(env: Env, customerId: string): Promise<Response> {
@@ -282,18 +292,10 @@ export async function handleApi(
     return err('authentication error', 401);
   }
 
+  // Self-hosted lazy init — no-op in hosted mode (CUSTOMER_DOMAIN unset)
+  await ensureCustomerExists(env, customerId);
+
   try {
-    // POST /api/bootstrap — first-time customer + domain setup (idempotent)
-    if (path === '/api/bootstrap' && method === 'POST') {
-      return await bootstrap(request, env, customerId);
-    }
-    // GET /api/bootstrap — check current bootstrap state
-    if (path === '/api/bootstrap' && method === 'GET') {
-      const { results } = await getDomainsByCustomer(env.DB, customerId);
-      if (results.length === 0) return json({ bootstrapped: false });
-      const d = results[0];
-      return json({ bootstrapped: true, customer_id: customerId, domain: d.domain, rua_address: d.rua_address });
-    }
     // GET /api/domains
     if (path === '/api/domains' && method === 'GET') {
       return await getDomains(env, customerId);

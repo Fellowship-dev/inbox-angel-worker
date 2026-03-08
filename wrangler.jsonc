@@ -5,15 +5,13 @@
 	// 3. Set REPORTS_DOMAIN to the subdomain you'll receive reports on
 	//    (e.g. "reports.yourdomain.com") — must be on your CF zone
 	// 4. Set FROM_EMAIL to any address on that domain
-	// 5. Run: wrangler secret put CLOUDFLARE_API_TOKEN  (DNS:Edit + Zone:Read)
-	//         wrangler secret put API_KEY               (your chosen auth key)
-	// 6. In CF dashboard: Email Routing → catch-all → Send to Worker
-	// 7. wrangler d1 migrations apply <your-db-name> --remote && wrangler deploy
-	// 8. Bootstrap your account (once):
-	//    curl -X POST https://<worker>/api/bootstrap \
-	//      -H "X-Api-Key: <API_KEY>" -H "Content-Type: application/json" \
-	//      -d '{"domain":"yourdomain.com","name":"Me","email":"you@yourdomain.com"}'
-	//    After bootstrap, POST returns existing config — safe to re-run.
+	// 5. Set CUSTOMER_DOMAIN, CUSTOMER_EMAIL, CUSTOMER_NAME below
+	//    (auto-provisioned on first authenticated request — no API call needed)
+	// 6. Run: wrangler secret put API_KEY  (your chosen auth key)
+	//    Optional: wrangler secret put CLOUDFLARE_API_TOKEN  (DNS:Edit + Zone:Read)
+	//    — if omitted, the worker prints the DNS TXT record you must add manually
+	// 7. In CF dashboard: Email Routing → catch-all → Send to Worker
+	// 8. wrangler d1 migrations apply <your-db-name> --remote && wrangler deploy
 	// ───────────────────────────────────────────────────────────────────────────
 
 	"name": "inbox-angel-worker",
@@ -50,11 +48,14 @@
 	"vars": {
 		"AUTH0_DOMAIN": "",           // empty = bypass mode, use API_KEY header instead
 		"AUTH0_AUDIENCE": "",         // e.g. "https://api.yourdomain.com"
-		"CLOUDFLARE_ACCOUNT_ID": "",
-		"CLOUDFLARE_ZONE_ID": "",     // zone ID of the domain receiving reports
+		"CLOUDFLARE_ACCOUNT_ID": "",  // optional: only needed for auto DNS provisioning
+		"CLOUDFLARE_ZONE_ID": "",     // optional: zone ID of the domain receiving reports
 		"REPORTS_DOMAIN": "",         // REQUIRED: e.g. "reports.yourdomain.com"
 		"CHECK_PREFIX": "check-",     // prefix for free-check addresses (optional)
 		"FROM_EMAIL": "",             // REQUIRED: reply-from for free-check emails
-		"RESEND_API_KEY": ""          // optional: transactional email for monitor alerts
+		"RESEND_API_KEY": "",         // optional: transactional email for monitor alerts
+		"CUSTOMER_DOMAIN": "",        // self-hosted: your domain (auto-provisioned on first request)
+		"CUSTOMER_EMAIL": "",         // self-hosted: alert + report recipient
+		"CUSTOMER_NAME": ""           // self-hosted: display name (default: "Self-hosted")
 	}
 }

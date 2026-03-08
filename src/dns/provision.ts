@@ -25,8 +25,9 @@ export class DnsProvisionError extends Error {
 }
 
 export interface DnsProvisionResult {
-  recordId: string;    // Cloudflare DNS record ID (for deletion)
-  recordName: string;  // Full DNS name that was created
+  recordId: string | null;  // Cloudflare DNS record ID (null in manual mode)
+  recordName: string;       // Full DNS name that was created
+  manual: boolean;          // true = CF creds absent, user must add DNS record manually
 }
 
 interface ProvisionEnv {
@@ -55,12 +56,13 @@ export async function provisionDomain(
   env: ProvisionEnv,
   customerDomain: string,
 ): Promise<DnsProvisionResult> {
-  if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ZONE_ID) {
-    throw new DnsProvisionError('Cloudflare credentials not configured');
-  }
-
   // RFC 7489 §7.1 cross-domain authorization record name
   const recordName = `${customerDomain}._report._dmarc.${env.REPORTS_DOMAIN}`;
+
+  if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ZONE_ID) {
+    // Manual mode — caller must add the DNS record themselves
+    return { recordId: null, recordName, manual: true };
+  }
 
   const body = {
     type: 'TXT',
@@ -88,7 +90,7 @@ export async function provisionDomain(
     throw new DnsProvisionError(`Cloudflare rejected DNS record creation: ${msg}`);
   }
 
-  return { recordId: data.result.id, recordName };
+  return { recordId: data.result.id, recordName, manual: false };
 }
 
 /**

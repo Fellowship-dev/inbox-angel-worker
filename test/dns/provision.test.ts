@@ -79,9 +79,12 @@ describe('provisionDomain', () => {
     await expect(provisionDomain(ENV, 'acme.com')).rejects.toThrow('DNS provision fetch failed');
   });
 
-  it('throws DnsProvisionError when CF credentials are not configured', async () => {
+  it('returns manual result when CF credentials are not configured', async () => {
     const bare = { CLOUDFLARE_API_TOKEN: '', CLOUDFLARE_ZONE_ID: '', REPORTS_DOMAIN: 'r.io' };
-    await expect(provisionDomain(bare, 'acme.com')).rejects.toThrow(DnsProvisionError);
+    const result = await provisionDomain(bare, 'acme.com');
+    expect(result.manual).toBe(true);
+    expect(result.recordId).toBeNull();
+    expect(result.recordName).toBe('acme.com._report._dmarc.r.io');
   });
 });
 
