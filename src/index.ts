@@ -3,8 +3,10 @@ import { handleApi } from './api/router';
 
 export interface Env {
   DB: D1Database;
-  AUTH0_DOMAIN: string;
+  AUTH0_DOMAIN: string;        // empty = bypass mode (use X-Api-Key)
   AUTH0_AUDIENCE: string;
+  AUTH0_ORG_CLAIM?: string;    // JWT claim for customer ID, default "org_id"
+  API_KEY?: string;            // bypass-mode API key (wrangler secret)
   CLOUDFLARE_ACCOUNT_ID: string;
   CLOUDFLARE_ZONE_ID: string;
   CLOUDFLARE_API_TOKEN: string; // secret
