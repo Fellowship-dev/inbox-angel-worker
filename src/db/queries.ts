@@ -173,6 +173,27 @@ export function getTopFailingSources(db: D1Database, domainId: number, since: nu
   `).bind(domainId, since, limit).all<FailingSource>();
 }
 
+export interface DailyDomainStat {
+  day: string;
+  total: number;
+  passed: number;
+  failed: number;
+}
+
+export function getDomainStats(db: D1Database, domainId: number, since: number) {
+  return db.prepare(`
+    SELECT
+      date(datetime(date_begin, 'unixepoch')) AS day,
+      SUM(total_count) AS total,
+      SUM(pass_count)  AS passed,
+      SUM(fail_count)  AS failed
+    FROM aggregate_reports
+    WHERE domain_id = ? AND date_begin >= ?
+    GROUP BY day
+    ORDER BY day ASC
+  `).bind(domainId, since).all<DailyDomainStat>();
+}
+
 // ── Report Records ───────────────────────────────────────────
 
 export function insertReportRecords(db: D1Database, records: Omit<ReportRecord, 'id' | 'created_at'>[]) {

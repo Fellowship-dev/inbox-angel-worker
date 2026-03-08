@@ -356,6 +356,51 @@ describe('DELETE /api/domains/:id', () => {
   });
 });
 
+// ── GET /api/domains/:id/stats ────────────────────────────────
+
+describe('GET /api/domains/:id/stats', () => {
+  it('returns stats for owned domain', async () => {
+    const env = makeEnv();
+    const domain: Partial<Domain> = { id: 1, domain: 'acme.com', customer_id: 'org_test' };
+    const stats = [{ day: '2026-03-01', total: 100, passed: 95, failed: 5 }];
+    (env.DB.prepare as any)
+      .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(domain) }) })
+      .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ all: vi.fn().mockResolvedValue({ results: stats }) }) });
+    const res = await handleApi(req('GET', '/api/domains/1/stats'), env, ctx);
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.domain).toBe('acme.com');
+    expect(body.stats).toEqual(stats);
+    expect(body.days).toBe(30);
+  });
+
+  it('returns 404 when domain belongs to another customer', async () => {
+    const env = makeEnv();
+    const other: Partial<Domain> = { id: 1, domain: 'acme.com', customer_id: 'org_other' };
+    (env.DB.prepare as any).mockReturnValueOnce({
+      bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(other) }),
+    });
+    const res = await handleApi(req('GET', '/api/domains/1/stats'), env, ctx);
+    expect(res.status).toBe(404);
+  });
+
+  it('returns 400 for non-numeric domain id', async () => {
+    const res = await handleApi(req('GET', '/api/domains/abc/stats'), makeEnv(), ctx);
+    expect(res.status).toBe(400);
+  });
+
+  it('defaults to 30 days and caps at 90', async () => {
+    const env = makeEnv();
+    const domain: Partial<Domain> = { id: 1, domain: 'acme.com', customer_id: 'org_test' };
+    (env.DB.prepare as any)
+      .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(domain) }) })
+      .mockReturnValue({ bind: vi.fn().mockReturnValue({ all: vi.fn().mockResolvedValue({ results: [] }) }) });
+    const res = await handleApi(req('GET', '/api/domains/1/stats?days=999'), env, ctx);
+    const body = await res.json() as any;
+    expect(body.days).toBe(90);
+  });
+});
+
 // ── GET /api/reports ──────────────────────────────────────────
 
 describe('GET /api/reports', () => {

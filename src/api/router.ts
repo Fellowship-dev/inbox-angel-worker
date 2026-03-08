@@ -9,6 +9,7 @@
 //   GET  /api/domains                     — list customer's monitored domains
 //   POST /api/domains                     — add a domain
 //   DELETE /api/domains/:id               — remove a domain
+//   GET  /api/domains/:id/stats           — daily pass/fail stats (days param, max 90)
 //   GET  /api/reports                     — list recent aggregate reports
 //   GET  /api/reports/:id                 — single report with per-IP records
 //   GET  /api/check-results               — recent free check results (last 20)
@@ -28,6 +29,7 @@ import {
   getCheckResultByToken,
   insertMonitorSubscription,
   upsertCustomer,
+  getDomainStats,
 } from '../db/queries';
 import type { DnsProvisionResult } from '../dns/provision';
 import { provisionDomain, deprovisionDomain, DnsProvisionError } from '../dns/provision';
@@ -227,6 +229,21 @@ async function getCheckResults(env: Env, customerId: string): Promise<Response> 
   return json({ results });
 }
 
+async function getDomainStatsSummary(env: Env, customerId: string, domainId: string, url: URL): Promise<Response> {
+  const id = parseInt(domainId, 10);
+  if (isNaN(id)) return err('invalid domain id', 400);
+
+  const domain = await getDomainById(env.DB, id);
+  if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+
+  const rawDays = parseInt(url.searchParams.get('days') ?? '30', 10);
+  const days = Math.min(isNaN(rawDays) ? 30 : rawDays, 90);
+  const since = Math.floor(Date.now() / 1000) - days * 86400;
+
+  const { results } = await getDomainStats(env.DB, id, since);
+  return json({ domain: domain.domain, days, stats: results });
+}
+
 // ── Main router ───────────────────────────────────────────────
 
 export async function handleApi(
@@ -306,6 +323,11 @@ export async function handleApi(
     // POST /api/domains
     if (path === '/api/domains' && method === 'POST') {
       return await addDomain(request, env, customerId);
+    }
+    // GET /api/domains/:id/stats
+    const domainStatsMatch = path.match(/^\/api\/domains\/([^/]+)\/stats$/);
+    if (domainStatsMatch && method === 'GET') {
+      return await getDomainStatsSummary(env, customerId, domainStatsMatch[1], url);
     }
     // DELETE /api/domains/:id
     const domainDeleteMatch = path.match(/^\/api\/domains\/([^/]+)$/);
