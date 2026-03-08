@@ -1,0 +1,88 @@
+import { AggregateReport, CheckResult, Customer, Domain, ReportRecord } from './types';
+
+// ── Customers ────────────────────────────────────────────────
+
+export function getCustomer(db: D1Database, id: string) {
+  return db.prepare('SELECT * FROM customers WHERE id = ?').bind(id).first<Customer>();
+}
+
+export function upsertCustomer(db: D1Database, c: Pick<Customer, 'id' | 'name' | 'email' | 'plan'>) {
+  return db.prepare(`
+    INSERT INTO customers (id, name, email, plan)
+    VALUES (?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET name=excluded.name, email=excluded.email, plan=excluded.plan, updated_at=unixepoch()
+  `).bind(c.id, c.name, c.email, c.plan).run();
+}
+
+// ── Domains ──────────────────────────────────────────────────
+
+export function getDomainsByCustomer(db: D1Database, customerId: string) {
+  return db.prepare('SELECT * FROM domains WHERE customer_id = ? ORDER BY domain')
+    .bind(customerId).all<Domain>();
+}
+
+export function getDomainByAddress(db: D1Database, ruaAddress: string) {
+  return db.prepare('SELECT * FROM domains WHERE rua_address = ?').bind(ruaAddress).first<Domain>();
+}
+
+export function insertDomain(db: D1Database, d: Pick<Domain, 'customer_id' | 'domain' | 'rua_address'>) {
+  return db.prepare(`
+    INSERT INTO domains (customer_id, domain, rua_address) VALUES (?, ?, ?)
+  `).bind(d.customer_id, d.domain, d.rua_address).run();
+}
+
+// ── Check Results ────────────────────────────────────────────
+
+export function insertCheckResult(db: D1Database, r: Omit<CheckResult, 'id' | 'created_at'>) {
+  return db.prepare(`
+    INSERT INTO check_results
+      (from_email, from_domain, spf_result, spf_domain, spf_record,
+       dkim_result, dkim_domain, dmarc_result, dmarc_policy, dmarc_record,
+       overall_status, report_sent)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    r.from_email, r.from_domain, r.spf_result, r.spf_domain, r.spf_record,
+    r.dkim_result, r.dkim_domain, r.dmarc_result, r.dmarc_policy, r.dmarc_record,
+    r.overall_status, r.report_sent
+  ).run();
+}
+
+// ── Aggregate Reports ────────────────────────────────────────
+
+export function insertAggregateReport(db: D1Database, r: Omit<AggregateReport, 'id' | 'created_at'>) {
+  return db.prepare(`
+    INSERT OR IGNORE INTO aggregate_reports
+      (customer_id, domain_id, org_name, report_id, date_begin, date_end,
+       total_count, pass_count, fail_count, raw_xml)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    r.customer_id, r.domain_id, r.org_name, r.report_id,
+    r.date_begin, r.date_end, r.total_count, r.pass_count, r.fail_count, r.raw_xml
+  ).run();
+}
+
+export function getRecentReports(db: D1Database, customerId: string, limit = 30) {
+  return db.prepare(`
+    SELECT r.*, d.domain FROM aggregate_reports r
+    JOIN domains d ON d.id = r.domain_id
+    WHERE r.customer_id = ?
+    ORDER BY r.date_begin DESC LIMIT ?
+  `).bind(customerId, limit).all<AggregateReport & { domain: string }>();
+}
+
+// ── Report Records ───────────────────────────────────────────
+
+export function insertReportRecords(db: D1Database, records: Omit<ReportRecord, 'id' | 'created_at'>[]) {
+  const stmt = db.prepare(`
+    INSERT INTO report_records
+      (report_id, customer_id, source_ip, count, disposition,
+       dkim_result, dkim_domain, spf_result, spf_domain, header_from)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  return db.batch(records.map(r =>
+    stmt.bind(
+      r.report_id, r.customer_id, r.source_ip, r.count, r.disposition,
+      r.dkim_result, r.dkim_domain, r.spf_result, r.spf_domain, r.header_from
+    )
+  ));
+}

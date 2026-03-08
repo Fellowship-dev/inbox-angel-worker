@@ -12,7 +12,8 @@
 		{
 			"binding": "DB",
 			"database_name": "inbox-angel",
-			"database_id": "REPLACE_AFTER_WRANGLER_D1_CREATE"
+			"database_id": "REPLACE_AFTER_WRANGLER_D1_CREATE",
+			"migrations_dir": "migrations"
 		}
 	],
 
