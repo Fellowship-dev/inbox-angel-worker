@@ -8,6 +8,8 @@ type Status = 'good' | 'warning' | 'danger';
 interface DomainRow {
   domain: Domain;
   passRate: number | null;
+  total: number;
+  failed: number;
   status: Status;
 }
 
@@ -52,14 +54,16 @@ export function Overview({ onUnauthorized }: Props) {
           const result = statsResults[i];
           let passRate: number | null = null;
 
+          let total = 0, failed = 0;
           if (result.status === 'fulfilled') {
             const stats: DomainStats = result.value;
-            const total = stats.stats.reduce((s, r) => s + r.total, 0);
+            total = stats.stats.reduce((s, r) => s + r.total, 0);
             const passed = stats.stats.reduce((s, r) => s + r.passed, 0);
+            failed = stats.stats.reduce((s, r) => s + r.failed, 0);
             passRate = total > 0 ? passed / total : null;
           }
 
-          return { domain, passRate, status: computeStatus(domain.dmarc_policy, passRate) };
+          return { domain, passRate, total, failed, status: computeStatus(domain.dmarc_policy, passRate) };
         });
 
         setRows(built);
@@ -103,31 +107,41 @@ export function Overview({ onUnauthorized }: Props) {
         </div>
       )}
 
-      {rows.map(({ domain, passRate, status }) => (
-        <div
-          key={domain.id}
-          style={{ ...styles.row, background: hovered === domain.id ? '#f9fafb' : 'transparent' }}
-          onClick={() => { window.location.hash = `#/domains/${domain.id}`; }}
-          onMouseEnter={() => setHovered(domain.id)}
-          onMouseLeave={() => setHovered(null)}
-        >
-          <span style={{ color: STATUS_COLOR[status], width: '1rem', flexShrink: 0 }}>
-            {STATUS_ICON[status]}
-          </span>
-          <span style={{ flex: 1, fontWeight: 500, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {domain.domain}
-          </span>
-          <span style={styles.badge}>
-            {domain.dmarc_policy ? POLICY_LABEL[domain.dmarc_policy] : '—'}
-          </span>
-          {!mobile && (
-            <span style={{ ...styles.muted, width: '5rem', textAlign: 'right' }}>
-              {passRate !== null ? `${Math.round(passRate * 100)}% pass` : '—'}
+      {rows.map(({ domain, passRate, total, failed, status }) => {
+        const rateColor = passRate === null ? '#9ca3af'
+          : passRate >= 0.95 ? '#16a34a'
+          : passRate >= 0.7  ? '#d97706'
+          : '#dc2626';
+        return (
+          <div
+            key={domain.id}
+            style={{ ...styles.row, background: hovered === domain.id ? '#f9fafb' : 'transparent' }}
+            onClick={() => { window.location.hash = `#/domains/${domain.id}`; }}
+            onMouseEnter={() => setHovered(domain.id)}
+            onMouseLeave={() => setHovered(null)}
+          >
+            <span style={{ color: STATUS_COLOR[status], width: '1rem', flexShrink: 0 }}>
+              {STATUS_ICON[status]}
             </span>
-          )}
-          <span style={styles.muted}>→</span>
-        </div>
-      ))}
+            <span style={{ flex: 1, fontWeight: 500, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {domain.domain}
+            </span>
+            <span style={styles.badge}>
+              {domain.dmarc_policy ? POLICY_LABEL[domain.dmarc_policy] : '—'}
+            </span>
+            <span style={{ ...styles.stat, color: rateColor, fontWeight: 600 }}>
+              {passRate !== null ? `${Math.round(passRate * 100)}%` : '—'}
+            </span>
+            {!mobile && total > 0 && (
+              <span style={styles.stat}>{total.toLocaleString()} msg</span>
+            )}
+            {!mobile && failed > 0 && (
+              <span style={{ ...styles.stat, color: '#dc2626' }}>{failed.toLocaleString()} failed</span>
+            )}
+            <span style={styles.muted}>→</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -163,6 +177,12 @@ const styles = {
   muted: {
     color: '#9ca3af',
     fontSize: '0.875rem',
+  } as const,
+  stat: {
+    fontSize: '0.85rem',
+    flexShrink: 0,
+    color: '#6b7280',
+    fontVariantNumeric: 'tabular-nums',
   } as const,
   addBtn: {
     padding: '0.3rem 0.75rem',
