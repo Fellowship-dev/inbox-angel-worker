@@ -2,17 +2,42 @@
 // All /api/* routes require authentication via requireAuth().
 // Auth provider is pluggable — see src/api/auth.ts.
 //
-// Routes:
-//   GET  /health                          — liveness probe (unauthenticated)
-//   POST /api/check-sessions              — create a free-check session (unauthenticated)
-//   GET  /api/check-sessions/:token       — poll for free-check result (unauthenticated)
-//   GET  /api/domains                     — list customer's monitored domains
-//   POST /api/domains                     — add a domain
-//   DELETE /api/domains/:id               — remove a domain
-//   GET  /api/domains/:id/stats           — daily pass/fail stats (days param, max 90)
-//   GET  /api/reports                     — list recent aggregate reports
-//   GET  /api/reports/:id                 — single report with per-IP records
-//   GET  /api/check-results               — recent free check results (last 20)
+// Unauthenticated:
+//   GET  /health                              — liveness probe
+//   GET  /api/version                         — running vs latest version
+//   POST /api/check-sessions                  — create a free-check session
+//   GET  /api/check-sessions/:token           — poll for free-check result
+//   POST /api/monitor                         — subscribe to change alerts (unauthenticated)
+//   GET  /api/auth/status                     — any admin configured? + env prefill
+//   POST /api/auth/setup                      — first-time admin creation
+//   POST /api/auth/login                      — password login → session token
+//   POST /api/auth/logout                     — clear session token
+//   POST /api/auth/forgot                     — send password reset email
+//   POST /api/auth/reset                      — set new password via reset token
+//   GET  /api/invites/:token                  — invite info
+//   POST /api/invites/:token/accept           — accept invite + create user
+//   GET  /api/init-key                        — auto-generated API key (no API_KEY set)
+//   GET  /api/domains/:id/export?key=         — CSV export (query-param auth)
+//
+// Authenticated:
+//   GET    /api/domains                       — list domains
+//   POST   /api/domains                       — add a domain
+//   DELETE /api/domains/:id                   — remove a domain
+//   GET    /api/domains/:id/stats             — daily pass/fail stats (days, max 90)
+//   GET    /api/domains/:id/reports?date=     — report sources for a specific date
+//   GET    /api/domains/:id/sources           — top failing sources (days, max 90)
+//   GET    /api/domains/:id/explore           — all sources with pass/fail (days, max 90)
+//   GET    /api/domains/:id/anomalies         — failing sources with Active/Older split
+//   GET    /api/domains/:id/dns-check         — check _dmarc TXT record in DNS
+//   GET    /api/domains/:id/monitor-subs      — list monitoring subscriptions
+//   PATCH  /api/domains/:id/alerts            — toggle domain-level alerts on/off
+//   PATCH  /api/monitor-subs/:id             — toggle subscription active status
+//   GET    /api/reports                       — list recent aggregate reports
+//   GET    /api/reports/:id                   — single report with per-IP records
+//   GET    /api/check-results                 — recent free check results (last 20)
+//   GET    /api/team                          — list users (admin only)
+//   POST   /api/team/invite                   — send invite link (admin only)
+//   DELETE /api/team/:id                      — remove team member (admin only)
 //
 // Self-hosted lazy init: if BASE_DOMAIN env var is set and no customer exists yet,
 // the first authenticated request auto-provisions customer + domain (no bootstrap call needed).
