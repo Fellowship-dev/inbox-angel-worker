@@ -53,6 +53,7 @@
 	// Environment variables — secrets go via: wrangler secret put <NAME>
 	"vars": {
 		"AUTH0_DOMAIN": "",           // empty = bypass mode, use API_KEY header instead
+		"API_KEY": "demo",            // dev only — in production use: wrangler secret put API_KEY
 		"AUTH0_AUDIENCE": "",         // e.g. "https://api.yourdomain.com"
 		"CLOUDFLARE_ACCOUNT_ID": "",  // optional: only needed for auto DNS provisioning
 		"CLOUDFLARE_ZONE_ID": "",     // optional: zone ID of the domain receiving reports
