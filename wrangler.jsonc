@@ -14,15 +14,19 @@
 	//      • Account / D1               : Edit
 	//    Set it: export CLOUDFLARE_API_TOKEN=<token>  (or wrangler will prompt)
 	//
-	//    Optional — only if you want auto DNS provisioning (otherwise manual):
-	//      Create a second token with:
-	//      • Zone / Zone       : Read   (scoped to your REPORTS_DOMAIN zone)
-	//      • Zone / DNS        : Edit   (scoped to your REPORTS_DOMAIN zone)
+	//    Optional — enables auto DNS provisioning + one-time email routing setup:
+	//      Create a second token scoped to your REPORTS_DOMAIN zone:
+	//      • Zone / Zone          : Read
+	//      • Zone / DNS           : Edit
+	//      • Zone / Email Routing : Edit
 	//    Then: wrangler secret put CLOUDFLARE_API_TOKEN  (runtime token, not deploy token)
+	//    Run once: npx tsx scripts/setup-email-routing.ts
+	//      → enables email routing on the zone
+	//      → adds MX records for REPORTS_DOMAIN subdomain
+	//      → sets catch-all rule: *@REPORTS_DOMAIN → this Worker
 	//
 	// 7. Run: wrangler secret put API_KEY  (your chosen dashboard auth key)
-	// 8. In CF dashboard: Email Routing → catch-all → Send to Worker
-	// 9. wrangler d1 migrations apply <your-db-name> --remote && wrangler deploy
+	// 8. wrangler d1 migrations apply <your-db-name> --remote && wrangler deploy
 	// ───────────────────────────────────────────────────────────────────────────
 
 	"name": "inbox-angel-worker",
