@@ -658,6 +658,26 @@ export async function handleApi(
       const { results } = await getAllSources(env.DB, id, since);
       return json({ days, domain: domain.domain, sources: results });
     }
+    // GET /api/domains/:id/dns-check — check if user has added the _dmarc TXT record
+    const dnsCheckMatch = path.match(/^\/api\/domains\/([^/]+)\/dns-check$/);
+    if (dnsCheckMatch && method === 'GET') {
+      const id = parseInt(dnsCheckMatch[1], 10);
+      if (isNaN(id)) return err('invalid domain id', 400);
+      const domain = await getDomainById(env.DB, id);
+      if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+
+      try {
+        const dohUrl = `https://cloudflare-dns.com/dns-query?name=_dmarc.${domain.domain}&type=TXT`;
+        const dohRes = await fetch(dohUrl, { headers: { Accept: 'application/dns-json' } });
+        const doh = await dohRes.json() as { Status: number; Answer?: { data: string }[] };
+        const records = doh.Answer ?? [];
+        const found = records.length > 0;
+        const has_rua = records.some(r => r.data.includes(domain.rua_address));
+        return json({ found, has_rua });
+      } catch {
+        return json({ found: false, has_rua: false, error: 'dns lookup failed' });
+      }
+    }
     // DELETE /api/domains/:id
     const domainDeleteMatch = path.match(/^\/api\/domains\/([^/]+)$/);
     if (domainDeleteMatch && method === 'DELETE') {

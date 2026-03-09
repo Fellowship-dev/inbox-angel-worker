@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
-import { getDomains, getDomainStats, getDomainSources } from '../api';
+import { getDomains, getDomainStats, getDomainSources, checkDomainDns } from '../api';
 import type { Domain, DomainStats, FailingSource } from '../types';
 import { useIsMobile } from '../hooks';
 
@@ -75,6 +75,7 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [dnsOk, setDnsOk] = useState<boolean | null>(null);
   const mobile = useIsMobile();
 
   useEffect(() => {
@@ -102,11 +103,20 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
     return () => { cancelled = true; };
   }, [id]);
 
+  const total = stats ? stats.stats.reduce((n, r) => n + r.total, 0) : 0;
+
+  // One-time DNS check when there's no data yet — helps user diagnose whether record is missing
+  useEffect(() => {
+    if (!stats || total > 0) return;
+    checkDomainDns(id)
+      .then(({ found, has_rua }) => setDnsOk(found && has_rua))
+      .catch(() => {});
+  }, [id, stats, total]);
+
   if (loading) return <p style={s.muted}>Loading…</p>;
   if (error) return <p style={{ color: '#dc2626' }}>Error: {error}</p>;
   if (!domain || !stats) return <p style={s.muted}>Domain not found.</p>;
 
-  const total = stats.stats.reduce((n, r) => n + r.total, 0);
   const passed = stats.stats.reduce((n, r) => n + r.passed, 0);
   const failed = stats.stats.reduce((n, r) => n + r.failed, 0);
   const passRate = total > 0 ? Math.round((passed / total) * 100) : null;
@@ -152,6 +162,13 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
               </button>
             </div>
           </div>
+        )}
+        {total === 0 && dnsOk !== null && (
+          <p style={{ ...s.guidanceBody, marginTop: '0.5rem', fontStyle: 'italic' }}>
+            {dnsOk
+              ? '✓ DNS record detected — reports will start arriving soon.'
+              : '⚠️ DNS record not found yet. Make sure you\'ve added it, then wait a few minutes for propagation.'}
+          </p>
         )}
       </div>
 

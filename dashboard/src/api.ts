@@ -79,6 +79,12 @@ export async function getVersion(): Promise<VersionInfo> {
   return res.json();
 }
 
+export async function checkDomainDns(id: number): Promise<{ found: boolean; has_rua: boolean }> {
+  const res = await apiFetch(`/api/domains/${id}/dns-check`);
+  if (!res.ok) await throwApiError(res);
+  return res.json();
+}
+
 export async function deleteDomain(id: number): Promise<void> {
   const res = await apiFetch(`/api/domains/${id}`, { method: 'DELETE' });
   if (!res.ok) await throwApiError(res);

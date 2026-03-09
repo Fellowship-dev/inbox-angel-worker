@@ -1,5 +1,5 @@
-import { useState } from 'preact/hooks';
-import { addDomain } from '../api';
+import { useState, useEffect, useRef } from 'preact/hooks';
+import { addDomain, checkDomainDns } from '../api';
 import type { AddDomainResult } from '../types';
 
 interface Props {
@@ -26,12 +26,31 @@ function CopyField({ label, value }: { label: string; value: string }) {
   );
 }
 
+type DnsStatus = 'checking' | 'found' | 'missing-rua' | 'not-found' | 'error';
+
 export function AddDomain({ onUnauthorized }: Props) {
   const [step, setStep] = useState<Step>('input');
   const [input, setInput] = useState('');
   const [result, setResult] = useState<AddDomainResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [dnsStatus, setDnsStatus] = useState<DnsStatus>('checking');
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (step !== 'setup' || !result) return;
+    const check = async () => {
+      try {
+        const { found, has_rua } = await checkDomainDns(result.domain.id);
+        if (found && has_rua) { setDnsStatus('found'); clearInterval(pollRef.current!); }
+        else if (found) setDnsStatus('missing-rua');
+        else setDnsStatus('not-found');
+      } catch { setDnsStatus('error'); }
+    };
+    check();
+    pollRef.current = setInterval(check, 15000);
+    return () => clearInterval(pollRef.current!);
+  }, [step, result]);
 
   const submit = async (e: Event) => {
     e.preventDefault();
@@ -127,6 +146,15 @@ export function AddDomain({ onUnauthorized }: Props) {
           <strong>Also add:</strong> {result!.dns_instructions}
         </div>
       )}
+
+      <div style={{ ...s.dnsStatus, ...(dnsStatus === 'found' ? s.dnsFound : dnsStatus === 'missing-rua' ? s.dnsMissingRua : s.dnsWaiting) }}>
+        {dnsStatus === 'checking' && '⏳ Checking for your DNS record…'}
+        {dnsStatus === 'not-found' && '⏳ DNS record not detected yet — checks every 15s. DNS changes can take a few minutes to propagate.'}
+        {dnsStatus === 'missing-rua' && '⚠️ TXT record found but the rua= address is missing. Double-check you copied the full Value above.'}
+        {dnsStatus === 'missing-rua' && <><br /><small>Expected: <code style={{ fontFamily: 'monospace', fontSize: '0.8em' }}>rua=mailto:{result!.domain.rua_address}</code></small></>}
+        {dnsStatus === 'found' && '✓ DNS record detected! Reports will start arriving within 24 hours.'}
+        {dnsStatus === 'error' && '⚠️ Could not check DNS — add the record above and you\'re done.'}
+      </div>
 
       <a href={`#/domains/${result!.domain.id}`} style={s.primaryBtn}>
         Go to {result!.domain.domain} →
@@ -282,4 +310,14 @@ const s = {
     borderRadius: '8px',
     marginBottom: '1.5rem',
   },
+  dnsStatus: {
+    fontSize: '0.875rem',
+    lineHeight: 1.5,
+    padding: '0.75rem 1rem',
+    borderRadius: '8px',
+    marginBottom: '1.5rem',
+  },
+  dnsWaiting: { background: '#f3f4f6', color: '#374151' },
+  dnsFound: { background: '#dcfce7', color: '#15803d' },
+  dnsMissingRua: { background: '#fef9c3', color: '#92400e' },
 };
