@@ -1,34 +1,44 @@
 # InboxAngel Worker — required secrets
-# Copy to .dev.vars for local development, or set via: wrangler secret put <NAME>
+# Deploy button: fill these in during setup.
+# CLI: copy to .dev.vars for local dev, or set via: wrangler secret put <NAME>
 
-# Dashboard auth key — choose any strong random string
-API_KEY=
-
-# Cloudflare API token with DNS:Edit + Email Routing Rules:Edit for your zone
+# ── Cloudflare API token (runtime) ───────────────────────────────────────────
+# Create at: dash.cloudflare.com → My Profile → API Tokens → Create Custom Token
+# Name it anything (e.g. "inbox-angel-runtime"). Required permissions:
+#   Account / Account Settings : Read
+#   Account / Email Sending    : Edit
+#   Zone    / Email Routing Rules : Edit
+#   Zone    / DNS              : Edit
+#   Zone    / Workers Routes   : Edit
+# Under Zone Resources → select the zone where REPORTS_DOMAIN lives.
+# ⚠️  This is NOT the same token the deploy button auto-creates for deployment.
 CLOUDFLARE_API_TOKEN=
 
-# The subdomain that will receive DMARC reports and free-check emails
-# Must be on your Cloudflare zone (e.g. reports.yourdomain.com)
+# Your Cloudflare Zone ID — find it at:
+# dash.cloudflare.com → click your domain → right sidebar → Zone ID
+CLOUDFLARE_ZONE_ID=
+
+# ── Email config ─────────────────────────────────────────────────────────────
+# Subdomain for receiving DMARC reports and free-check emails.
+# Must be on the same Cloudflare zone as above (e.g. reports.yourdomain.com)
 REPORTS_DOMAIN=
 
-# From address for outbound notification emails
+# From address for outbound notification emails (must be on the same zone)
 FROM_EMAIL=
 
-# Your domain — auto-provisions your account on first authenticated request
+# ── Your account ─────────────────────────────────────────────────────────────
+# Your domain — auto-provisions your account on first visit to the dashboard
 CUSTOMER_DOMAIN=
 
 # Your email address — receives monitoring alerts and weekly digests
 CUSTOMER_EMAIL=
 
-# Display name shown in the dashboard
+# Display name shown in the dashboard (e.g. "Acme Corp")
 CUSTOMER_NAME=
 
-# Optional: enable verbose logging to Cloudflare Workers Logs (wrangler dev output or CF dashboard Logs tab).
-# Logs are written locally only — nothing is sent to any external service.
-# Set to "true" to debug email routing, DNS provisioning, auth, and inbound email parsing.
+# ── Optional ──────────────────────────────────────────────────────────────────
+# Verbose logging to Cloudflare Workers Logs (nothing sent externally)
 DEBUG=false
 
-# Optional: send anonymous usage events to InboxAngel to help improve the product.
-# No domain names, emails, or IPs are ever collected — only event types and worker version.
-# Set to "true" to opt in. Default: off.
+# Anonymous usage events (event types + worker version only, no domains or emails)
 TELEMETRY_ENABLED=false

@@ -27,5 +27,30 @@
 	"dependencies": {
 		"fast-xml-parser": "^5.4.2",
 		"fflate": "^0.8.2"
+	},
+	"cloudflare": {
+		"bindings": {
+			"CLOUDFLARE_API_TOKEN": {
+				"description": "Runtime API token for Email Routing + DNS writes. **Not** the deploy token — create a separate one at [My Profile → API Tokens → Create Custom Token](https://dash.cloudflare.com/profile/api-tokens/create). Required permissions: Account Settings:Read, Email Sending:Edit, Zone / Email Routing Rules:Edit, DNS:Edit, Workers Routes:Edit."
+			},
+			"CLOUDFLARE_ZONE_ID": {
+				"description": "Your Cloudflare Zone ID. Find it at [dash.cloudflare.com](https://dash.cloudflare.com) → click your domain → right sidebar → Zone ID."
+			},
+			"REPORTS_DOMAIN": {
+				"description": "Subdomain for receiving DMARC reports and free-check emails (e.g. `reports.yourdomain.com`). Must be on the same Cloudflare zone."
+			},
+			"FROM_EMAIL": {
+				"description": "Sender address for outbound alerts and digests (e.g. `noreply@reports.yourdomain.com`). Must be on the same Cloudflare zone."
+			},
+			"CUSTOMER_DOMAIN": {
+				"description": "Your domain (e.g. `yourdomain.com`). Auto-provisions your account on first dashboard visit — no extra setup needed."
+			},
+			"CUSTOMER_EMAIL": {
+				"description": "Your email address. Receives monitoring alerts and weekly DMARC digest emails."
+			},
+			"CUSTOMER_NAME": {
+				"description": "Your org display name shown in the dashboard (e.g. `Acme Corp`)."
+			}
+		}
 	}
 }
