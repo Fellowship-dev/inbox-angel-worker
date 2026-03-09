@@ -21,12 +21,16 @@ The button provisions the D1 database, runs migrations, prompts for all required
 
 **Option B — CLI:**
 
-```bash
-npm install && npm install --prefix dashboard
-npm run deploy
+First edit `wrangler.jsonc` — replace these three values with your own:
+
+```jsonc
+"account_id": "<your CF account ID>",
+"CLOUDFLARE_ZONE_ID": "<your zone ID>",
+"WORKER_NAME": "<your worker name>",    // must match the "name" field at the top
+"routes": [{ "pattern": "<your-worker>.<your-domain>/*", "zone_name": "<your-domain>" }]
 ```
 
-`npm run deploy` runs migrations, builds the dashboard, and deploys the Worker. Set secrets first:
+Then set secrets and deploy:
 
 ```bash
 wrangler secret put API_KEY              # your chosen dashboard password
@@ -36,9 +40,10 @@ wrangler secret put FROM_EMAIL           # e.g. noreply@reports.yourdomain.com
 wrangler secret put CUSTOMER_DOMAIN      # your domain (e.g. yourdomain.com)
 wrangler secret put CUSTOMER_EMAIL       # your email address
 wrangler secret put CUSTOMER_NAME        # display name
-```
 
-Also update `account_id`, `CLOUDFLARE_ZONE_ID`, and the `routes` pattern in `wrangler.jsonc` with your own values.
+npm install && npm install --prefix dashboard
+npm run deploy
+```
 
 ---
 
@@ -104,10 +109,11 @@ Receiving mail servers → send XML aggregate reports → Cloudflare Email Worke
 | Layer | Choice | Notes |
 |---|---|---|
 | Compute | Cloudflare Workers | Edge runtime, zero cold start |
-| Inbound email | Cloudflare Email Workers | Receives `*.reports.yourdomain.com` |
+| Inbound email | Cloudflare Email Workers | Receives `*@REPORTS_DOMAIN` |
+| Outbound email | Cloudflare Email Workers | Sends digests and alerts |
 | Storage | Cloudflare D1 | SQLite at the edge |
-| DNS provisioning | Cloudflare DNS API | Provisions per-customer authorization records |
-| Auth | API key (self-hosted) / Auth0 (SaaS) | Pluggable via env vars |
+| DNS provisioning | Cloudflare DNS API | Provisions per-domain authorization records |
+| Auth | API key (self-hosted) / Auth0 (SaaS) | Pluggable via env vars — leave `AUTH0_DOMAIN` empty for API key mode |
 | Frontend | Embedded SPA | Built from `dashboard/`, served as static assets |
 
 ---
@@ -132,6 +138,41 @@ company.com._report._dmarc.reports.yourdomain.com  TXT  "v=DMARC1"
 ```
 
 Without this, receiving mail servers silently reject the external RUA address. The worker provisions it automatically via the Cloudflare DNS API when you add a domain. If your domain is on external DNS, the dashboard shows the record value to add manually.
+
+---
+
+## Uninstalling
+
+No lock-in. Here's how to leave cleanly.
+
+**1. Export your data first**
+
+Dashboard → any domain → Settings → Export. Downloads a full JSON export of all reports, sources, and stats for that domain. Do this for each domain before proceeding.
+
+**2. Remove your domains from the dashboard**
+
+Dashboard → each domain → Settings → Delete domain. This automatically removes the DNS authorization records the worker provisioned (`company.com._report._dmarc.reports.yourdomain.com`).
+
+**3. Update your DMARC records**
+
+Remove the `rua@reports.yourdomain.com` address from each domain's `_dmarc` TXT record. Leave any other `rua` addresses intact.
+
+**4. Delete the Worker and database**
+
+```bash
+wrangler delete                        # removes the Worker and its routes
+wrangler d1 delete inbox-angel         # permanently deletes the D1 database + all data
+```
+
+**5. Clean up email routing**
+
+In the Cloudflare dashboard → your zone → Email → Routing:
+- Delete or update the catch-all rule that points to this Worker
+- Delete the MX records added for your `REPORTS_DOMAIN` subdomain (e.g. `reports.yourdomain.com`)
+
+**6. Delete the API tokens**
+
+Cloudflare dashboard → My Profile → API Tokens → delete the token you created for this Worker.
 
 ---
 
