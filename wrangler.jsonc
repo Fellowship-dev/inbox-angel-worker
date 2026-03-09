@@ -7,11 +7,22 @@
 	// 4. Set FROM_EMAIL to any address on that domain
 	// 5. Set CUSTOMER_DOMAIN, CUSTOMER_EMAIL, CUSTOMER_NAME below
 	//    (auto-provisioned on first authenticated request — no API call needed)
-	// 6. Run: wrangler secret put API_KEY  (your chosen auth key)
-	//    Optional: wrangler secret put CLOUDFLARE_API_TOKEN  (DNS:Edit + Zone:Read)
-	//    — if omitted, the worker prints the DNS TXT record you must add manually
-	// 7. In CF dashboard: Email Routing → catch-all → Send to Worker
-	// 8. wrangler d1 migrations apply <your-db-name> --remote && wrangler deploy
+	// 6. Create a Cloudflare API token (dash.cloudflare.com → My Profile → API Tokens):
+	//    Required permissions:
+	//      • Account / Account Settings : Read
+	//      • Account / Workers Scripts  : Edit
+	//      • Account / D1               : Edit
+	//    Set it: export CLOUDFLARE_API_TOKEN=<token>  (or wrangler will prompt)
+	//
+	//    Optional — only if you want auto DNS provisioning (otherwise manual):
+	//      Create a second token with:
+	//      • Zone / Zone       : Read   (scoped to your REPORTS_DOMAIN zone)
+	//      • Zone / DNS        : Edit   (scoped to your REPORTS_DOMAIN zone)
+	//    Then: wrangler secret put CLOUDFLARE_API_TOKEN  (runtime token, not deploy token)
+	//
+	// 7. Run: wrangler secret put API_KEY  (your chosen dashboard auth key)
+	// 8. In CF dashboard: Email Routing → catch-all → Send to Worker
+	// 9. wrangler d1 migrations apply <your-db-name> --remote && wrangler deploy
 	// ───────────────────────────────────────────────────────────────────────────
 
 	"name": "inbox-angel-worker",
