@@ -52,6 +52,19 @@ export async function getCheckResults(): Promise<{ results: import('./types').Ch
   return res.json();
 }
 
+export interface VersionInfo {
+  current: string;
+  latest: string | null;
+  update_available: boolean;
+  release_url: string;
+}
+
+export async function getVersion(): Promise<VersionInfo> {
+  const res = await fetch('/api/version');
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
 export async function deleteDomain(id: number): Promise<void> {
   const res = await apiFetch(`/api/domains/${id}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`${res.status}`);

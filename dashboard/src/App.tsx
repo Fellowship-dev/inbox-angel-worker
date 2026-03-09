@@ -8,6 +8,37 @@ import { DomainSettings } from './pages/DomainSettings';
 import { Explore } from './pages/Explore';
 import { EmailCheck } from './pages/EmailCheck';
 import { ApiKeyGate } from './ApiKeyGate';
+import { getVersion, type VersionInfo } from './api';
+
+const DISMISS_KEY = 'ia_update_dismissed';
+
+function UpdateBanner({ info, onDismiss }: { info: VersionInfo; onDismiss: () => void }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      gap: '0.75rem', flexWrap: 'wrap',
+      background: '#fefce8', border: '1px solid #fde68a',
+      borderRadius: '8px', padding: '0.6rem 1rem', marginBottom: '1rem',
+      fontSize: '0.875rem', color: '#92400e',
+    }}>
+      <span>
+        New version available: <strong>v{info.latest}</strong>
+        {' '}— you're on <strong>v{info.current}</strong>
+      </span>
+      <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexShrink: 0 }}>
+        <a href={info.release_url} target="_blank" rel="noreferrer" style={{
+          color: '#92400e', fontWeight: 600, textDecoration: 'underline',
+        }}>
+          View release
+        </a>
+        <button onClick={onDismiss} style={{
+          background: 'none', border: 'none', cursor: 'pointer',
+          color: '#b45309', fontSize: '1rem', lineHeight: 1, padding: '0 2px',
+        }}>✕</button>
+      </div>
+    </div>
+  );
+}
 
 function getRoute(): string {
   return window.location.hash.replace(/^#/, '') || '/';
@@ -21,12 +52,18 @@ function navActive(route: string, section: 'domains' | 'check'): boolean {
 export function App() {
   const [route, setRoute] = useState(getRoute);
   const [hasKey, setHasKey] = useState(() => !!localStorage.getItem('ia_api_key'));
+  const [update, setUpdate] = useState<VersionInfo | null>(null);
   const handleUnauth = () => { localStorage.removeItem('ia_api_key'); setHasKey(false); };
 
   useEffect(() => {
     const onHash = () => setRoute(getRoute());
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
+  useEffect(() => {
+    if (sessionStorage.getItem(DISMISS_KEY)) return;
+    getVersion().then(v => { if (v.update_available) setUpdate(v); }).catch(() => {});
   }, []);
 
   const mobile = useIsMobile();
@@ -47,6 +84,12 @@ export function App() {
         </nav>
       </header>
       <main style={styles.main}>
+        {update && (
+          <UpdateBanner info={update} onDismiss={() => {
+            sessionStorage.setItem(DISMISS_KEY, '1');
+            setUpdate(null);
+          }} />
+        )}
         {route === '/' && <Overview onUnauthorized={handleUnauth} />}
         {route === '/add' && <AddDomain onUnauthorized={handleUnauth} />}
         {route === '/check' && <EmailCheck />}

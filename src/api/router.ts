@@ -332,7 +332,7 @@ async function getDomainSources(env: Env, customerId: string, domainId: string, 
 export async function handleApi(
   request: Request,
   env: Env,
-  _ctx: ExecutionContext,
+  ctx: ExecutionContext,
 ): Promise<Response> {
   const url = new URL(request.url);
   const method = request.method.toUpperCase();
@@ -341,6 +341,36 @@ export async function handleApi(
   // Unauthenticated routes
   if (path === '/health' && method === 'GET') {
     return json({ ok: true, version, ts: Date.now() });
+  }
+
+  // GET /api/version — compares running version against latest GitHub release
+  // Cached for 24h per-instance via CF Cache API — one GitHub request per day max
+  if (path === '/api/version' && method === 'GET') {
+    const GH_RAW = 'https://raw.githubusercontent.com/Fellowship-dev/inbox-angel-worker/main/package.json';
+    const cacheKey = new Request(GH_RAW);
+    let latest: string | null = null;
+    try {
+      const cached = await caches.default.match(cacheKey);
+      if (cached) {
+        const pkg = await cached.json() as { version: string };
+        latest = pkg.version;
+      } else {
+        const res = await fetch(GH_RAW);
+        if (res.ok) {
+          const pkg = await res.json() as { version: string };
+          latest = pkg.version;
+          ctx.waitUntil(caches.default.put(cacheKey, new Response(JSON.stringify(pkg), {
+            headers: { 'Cache-Control': 'max-age=86400', 'Content-Type': 'application/json' },
+          })));
+        }
+      }
+    } catch { /* GitHub unreachable — return current only */ }
+    return json({
+      current: version,
+      latest,
+      update_available: latest !== null && latest !== version,
+      release_url: 'https://github.com/Fellowship-dev/inbox-angel-worker/releases/latest',
+    });
   }
 
   // POST /api/check-sessions — generate a unique free-check email for a browser session
