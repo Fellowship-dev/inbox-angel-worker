@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'preact/hooks';
 import { Overview } from './pages/Overview';
+import { ApiKeyGate } from './ApiKeyGate';
 
 function getRoute(): string {
   return window.location.hash.replace(/^#/, '') || '/';
@@ -7,6 +8,7 @@ function getRoute(): string {
 
 export function App() {
   const [route, setRoute] = useState(getRoute);
+  const [hasKey, setHasKey] = useState(() => !!localStorage.getItem('ia_api_key'));
 
   useEffect(() => {
     const onHash = () => setRoute(getRoute());
@@ -14,13 +16,15 @@ export function App() {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
+  if (!hasKey) return <ApiKeyGate onSave={() => setHasKey(true)} />;
+
   return (
     <div style={styles.shell}>
       <header style={styles.header}>
         <a href="#/" style={styles.logo}>InboxAngel</a>
       </header>
       <main style={styles.main}>
-        {route === '/' && <Overview />}
+        {route === '/' && <Overview onUnauthorized={() => { localStorage.removeItem('ia_api_key'); setHasKey(false); }} />}
         {route !== '/' && (
           <p style={{ color: '#9ca3af' }}>
             Page not found. <a href="#/">Back to overview</a>

@@ -21,7 +21,11 @@ const STATUS_ICON: Record<Status, string> = { good: '●', warning: '▲', dange
 const STATUS_COLOR: Record<Status, string> = { good: '#16a34a', warning: '#d97706', danger: '#dc2626' };
 const POLICY_LABEL: Record<string, string> = { none: 'none', quarantine: 'quarantine', reject: 'reject' };
 
-export function Overview() {
+interface Props {
+  onUnauthorized: () => void;
+}
+
+export function Overview({ onUnauthorized }: Props) {
   const [rows, setRows] = useState<DomainRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -56,7 +60,9 @@ export function Overview() {
 
         setRows(built);
       } catch (e: any) {
-        if (!cancelled) setError(e.message ?? 'Failed to load');
+        if (cancelled) return;
+        if (e.message === '401') { onUnauthorized(); return; }
+        setError(e.message ?? 'Failed to load');
       } finally {
         if (!cancelled) setLoading(false);
       }
