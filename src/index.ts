@@ -16,6 +16,8 @@ export interface Env {
   CLOUDFLARE_ZONE_ID?: string;
   CLOUDFLARE_API_TOKEN?: string; // secret — optional; omit to provision DNS manually
   WORKER_NAME?: string;          // defaults to "inbox-angel-worker"; used for email routing catch-all rule
+  TELEMETRY_ENABLED?: string;    // "true" to send anonymous usage events to InboxAngel (default: off)
+  DEBUG?: string;                // "true" to enable verbose logging to Cloudflare Workers Logs (default: off)
   REPORTS_DOMAIN: string;        // e.g. "reports.inboxangel.io" — REQUIRED, no default
   FROM_EMAIL: string;
   RESEND_API_KEY?: string;       // transactional email for monitor alerts (optional — logs if unset)

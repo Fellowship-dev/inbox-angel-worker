@@ -40,6 +40,8 @@ import {
 import type { DnsProvisionResult } from '../dns/provision';
 import { provisionDomain, deprovisionDomain, DnsProvisionError } from '../dns/provision';
 import { ensureEmailRouting } from '../setup/email-routing';
+import { track } from '../telemetry';
+import { debug } from '../debug';
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -85,9 +87,11 @@ async function addDomain(request: Request, env: Env, customerId: string): Promis
   // On first domain add, auto-configure email routing (idempotent)
   const { results: existing } = await getDomainsByCustomer(env.DB, customerId);
   if (existing.length === 0) {
-    await ensureEmailRouting(env).catch(e =>
-      console.error('[setup] email routing setup failed (non-fatal):', e)
-    );
+    debug(env, 'domain.add', { step: 'email-routing-setup', firstDomain: true });
+    await ensureEmailRouting(env).catch(e => {
+      debug(env, 'domain.add', { step: 'email-routing-setup', error: e instanceof Error ? e.message : String(e) });
+      console.error('[setup] email routing setup failed (non-fatal):', e);
+    });
   }
 
   // Fixed rua address — routing is by XML policy_domain, not by address encoding
@@ -99,8 +103,10 @@ async function addDomain(request: Request, env: Env, customerId: string): Promis
   let provision: DnsProvisionResult;
   try {
     provision = await provisionDomain(env, domain);
+    debug(env, 'domain.add', { step: 'dns-provision', domain, manual: provision.manual, recordName: provision.recordName });
   } catch (e) {
     if (e instanceof DnsProvisionError) {
+      debug(env, 'domain.add', { step: 'dns-provision', error: e.message });
       console.error('DNS provision failed:', e.message);
       return err('DNS provisioning failed — check Cloudflare credentials', 502);
     }
@@ -125,6 +131,8 @@ async function addDomain(request: Request, env: Env, customerId: string): Promis
       console.warn('updateDomainDnsRecord failed (non-fatal):', e)
     );
   }
+
+  track(env, 'domain.add'); // fire-and-forget, non-blocking
 
   const response: Record<string, unknown> = {
     domain,
@@ -341,6 +349,7 @@ export async function handleApi(
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
     const token = Array.from(crypto.getRandomValues(new Uint8Array(8)))
       .map(b => chars[b % chars.length]).join('');
+    track(env, 'check.created'); // fire-and-forget
     return json({ token, email: `${token}@${env.REPORTS_DOMAIN}` }, 201);
   }
 
@@ -391,7 +400,9 @@ export async function handleApi(
   try {
     const ctx = await requireAuth(request, env);
     customerId = ctx.customerId;
+    debug(env, 'auth.ok', { method, path, customerId, mode: env.AUTH0_DOMAIN ? 'jwt' : 'api-key' });
   } catch (e) {
+    debug(env, 'auth.fail', { method, path, error: e instanceof Error ? e.message : String(e) });
     if (e instanceof AuthError) return err(e.message, e.status);
     return err('authentication error', 401);
   }

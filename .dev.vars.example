@@ -22,3 +22,13 @@ CUSTOMER_EMAIL=
 
 # Display name shown in the dashboard
 CUSTOMER_NAME=
+
+# Optional: enable verbose logging to Cloudflare Workers Logs (wrangler dev output or CF dashboard Logs tab).
+# Logs are written locally only — nothing is sent to any external service.
+# Set to "true" to debug email routing, DNS provisioning, auth, and inbound email parsing.
+DEBUG=false
+
+# Optional: send anonymous usage events to InboxAngel to help improve the product.
+# No domain names, emails, or IPs are ever collected — only event types and worker version.
+# Set to "true" to opt in. Default: off.
+TELEMETRY_ENABLED=false

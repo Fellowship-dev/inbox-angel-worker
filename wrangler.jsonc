@@ -103,7 +103,9 @@
 		"AUTH0_AUDIENCE": "",         // e.g. "https://api.yourdomain.com"
 		"CLOUDFLARE_ACCOUNT_ID": "f8a1abc24625b0ca9f9e34d87395c67c",
 		"CLOUDFLARE_ZONE_ID": "690972fb988fcd672204dabbaad64c47",
-		"WORKER_NAME": "inbox-angel-worker"  // must match the "name" field above
+		"WORKER_NAME": "inbox-angel-worker",  // must match the "name" field above
+		"TELEMETRY_ENABLED": "false",         // set to "true" to send anonymous usage stats
+		"DEBUG": "false"                      // set to "true" to enable verbose logs in CF Workers Logs (local only, nothing sent externally)
 		// Secrets (set via wrangler secret put):
 		//   API_KEY              — dashboard auth key
 		//   CLOUDFLARE_API_TOKEN — EMAIL token (email routing + DNS writes)

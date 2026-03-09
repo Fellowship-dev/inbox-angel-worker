@@ -1,6 +1,8 @@
 import { Env } from '../index';
 import { handleFreeCheck } from './free-check';
 import { handleDmarcReport } from './dmarc-report';
+import { track } from '../telemetry';
+import { debug } from '../debug';
 
 // Routes inbound email by recipient address local part:
 //   rua@reports.yourdomain.com  → DMARC RUA aggregate report (routed by XML content)
@@ -13,11 +15,13 @@ export async function handleEmail(
   const to = message.to.toLowerCase();
   const localPart = to.split('@')[0];
 
+  debug(env, 'email.inbound', { to, from: message.from, route: localPart === 'rua' ? 'dmarc-report' : 'free-check' });
+
   if (localPart === 'rua') {
-    // RUA report — customer is resolved from the policy_domain in the XML
+    track(env, 'report.received'); // fire-and-forget
     await handleDmarcReport(message, env);
   } else {
-    // Session-based check — local part is the 8-char token
+    track(env, 'check.received'); // fire-and-forget
     await handleFreeCheck(message, env, localPart);
   }
 }
