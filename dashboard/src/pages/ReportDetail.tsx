@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'preact/hooks';
 import { getDomainReport } from '../api';
 import type { DayReport, ReportSource } from '../types';
+import { useIsMobile } from '../hooks';
 
 interface Props {
   domainId: number;
-  date: string; // YYYY-MM-DD
+  date: string;
   onUnauthorized: () => void;
 }
 
@@ -15,15 +16,12 @@ function formatDate(iso: string): string {
   });
 }
 
-// The sending service domain — different from header_from (their domain)
-// e.g. spf_domain = "sendgrid.net", header_from = "acme.com" → "via sendgrid.net"
 function serviceVia(src: ReportSource): string | null {
   const auth = src.spf_domain || src.dkim_domain;
   if (!auth || auth === src.header_from) return null;
   return auth;
 }
 
-// Plain-language explanation — no jargon
 function explain(src: ReportSource): string {
   const from = src.header_from ? `"${src.header_from}"` : 'your domain';
   const via = serviceVia(src);
@@ -39,7 +37,6 @@ function explain(src: ReportSource): string {
     return `${service} isn't listed in your SPF record but is sending as ${from}. ` +
       `If this is a service you use (e.g. a newsletter tool or CRM), authorize it. ${fix}`;
   }
-  // dkim fail
   return `${service} sent mail without a valid DKIM signature for ${from}. ` +
     `SPF is passing, but DKIM isn't — configure DKIM signing for this service to fully protect your domain.`;
 }
@@ -48,6 +45,7 @@ export function ReportDetail({ domainId, date, onUnauthorized }: Props) {
   const [report, setReport] = useState<DayReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const mobile = useIsMobile();
 
   useEffect(() => {
     let cancelled = false;
@@ -66,11 +64,10 @@ export function ReportDetail({ domainId, date, onUnauthorized }: Props) {
   if (error) return <p style={{ color: '#dc2626' }}>Error: {error}</p>;
   if (!report) return null;
 
-  const { summary, sources } = report;
+  const { domain, summary, sources } = report;
   const failing = sources.filter((src) => !src.spf_pass || !src.dkim_pass);
   const passing = sources.filter((src) => src.spf_pass && src.dkim_pass);
 
-  // Hero line (Postmark style)
   let hero: string;
   if (summary.total === 0) {
     hero = 'No reports received for this date.';
@@ -82,24 +79,24 @@ export function ReportDetail({ domainId, date, onUnauthorized }: Props) {
 
   return (
     <div>
-      <a href={`#/domains/${domainId}`} style={s.back}>← Back to domain</a>
+      <a href={`#/domains/${domainId}`} style={s.back}>← {domain}</a>
 
       <div style={s.pageHeader}>
         <h2 style={s.title}>{formatDate(date)}</h2>
         <p style={{ ...s.hero, color: failing.length > 0 ? '#dc2626' : '#16a34a' }}>{hero}</p>
       </div>
 
-      {/* Summary numbers */}
+      {/* Summary numbers — stack on mobile */}
       {summary.total > 0 && (
-        <div style={s.summaryRow}>
-          <Stat label="Pass rate" value={`${Math.round((summary.passed / summary.total) * 100)}%`} accent={failing.length === 0} />
-          <Stat label="Total" value={summary.total.toLocaleString()} />
-          <Stat label="Passed" value={summary.passed.toLocaleString()} />
-          {summary.failed > 0 && <Stat label="Failed" value={summary.failed.toLocaleString()} danger />}
+        <div style={{ ...s.summaryRow, flexDirection: mobile ? 'column' : 'row', gap: mobile ? '0' : '2rem' }}>
+          <Stat label="Pass rate" value={`${Math.round((summary.passed / summary.total) * 100)}%`} accent={failing.length === 0} mobile={mobile} />
+          <Stat label="Total" value={summary.total.toLocaleString()} mobile={mobile} />
+          <Stat label="Passed" value={summary.passed.toLocaleString()} mobile={mobile} />
+          {summary.failed > 0 && <Stat label="Failed" value={summary.failed.toLocaleString()} danger mobile={mobile} />}
         </div>
       )}
 
-      {/* Failing source cards (EasyDMARC layout, Postmark language) */}
+      {/* Failing source cards */}
       {failing.length > 0 && (
         <section style={s.section}>
           <h3 style={s.sectionTitle}>Needs attention</h3>
@@ -108,7 +105,7 @@ export function ReportDetail({ domainId, date, onUnauthorized }: Props) {
               const via = serviceVia(src);
               return (
                 <div key={`${src.source_ip}-${src.header_from}`} style={s.failCard}>
-                  <div style={s.cardTop}>
+                  <div style={{ ...s.cardTop, flexWrap: 'wrap' }}>
                     <div style={s.cardLeft}>
                       <code style={s.ip}>{src.source_ip}</code>
                       {via && <span style={s.via}>via {via}</span>}
@@ -132,7 +129,7 @@ export function ReportDetail({ domainId, date, onUnauthorized }: Props) {
         </section>
       )}
 
-      {/* Passing sources — compact list */}
+      {/* Passing sources */}
       {passing.length > 0 && (
         <section style={s.section}>
           <h3 style={s.sectionTitle}>Passing sources</h3>
@@ -142,7 +139,7 @@ export function ReportDetail({ domainId, date, onUnauthorized }: Props) {
               return (
                 <div key={`${src.source_ip}-${src.header_from}`} style={s.passRow}>
                   <span style={s.passCheck}>✓</span>
-                  <div style={s.passInfo}>
+                  <div style={{ ...s.passInfo, flexWrap: 'wrap' }}>
                     <code style={s.ip}>{src.source_ip}</code>
                     {via && <span style={s.via}>via {via}</span>}
                   </div>
@@ -157,12 +154,15 @@ export function ReportDetail({ domainId, date, onUnauthorized }: Props) {
   );
 }
 
-function Stat({ label, value, accent, danger }: { label: string; value: string; accent?: boolean; danger?: boolean }) {
+function Stat({ label, value, accent, danger, mobile }: { label: string; value: string; accent?: boolean; danger?: boolean; mobile?: boolean }) {
   const color = danger ? '#dc2626' : accent ? '#16a34a' : '#111827';
   return (
-    <div style={s.stat}>
-      <div style={{ ...s.statValue, color }}>{value}</div>
-      <div style={s.statLabel}>{label}</div>
+    <div style={{
+      ...s.stat,
+      ...(mobile ? { flexDirection: 'row' as const, justifyContent: 'space-between', alignItems: 'baseline', borderBottom: '1px solid #f3f4f6', padding: '0.6rem 0' } : {}),
+    }}>
+      <div style={{ ...s.statLabel, ...(mobile ? { order: 1 } : {}) }}>{label}</div>
+      <div style={{ ...s.statValue, color, ...(mobile ? { fontSize: '1.1rem', order: 2 } : {}) }}>{value}</div>
     </div>
   );
 }
@@ -172,27 +172,17 @@ const s = {
   pageHeader: { marginBottom: '1.5rem' },
   title: { margin: '0 0 0.4rem', fontSize: '1.5rem', fontWeight: 700 },
   hero: { margin: 0, fontSize: '1rem', fontWeight: 500 } as const,
-
-  summaryRow: { display: 'flex', gap: '2rem', padding: '1.25rem 0', borderTop: '1px solid #e5e7eb', borderBottom: '1px solid #e5e7eb', marginBottom: '2rem' } as const,
+  summaryRow: { display: 'flex', padding: '1.25rem 0', borderTop: '1px solid #e5e7eb', borderBottom: '1px solid #e5e7eb', marginBottom: '2rem' } as const,
   stat: { display: 'flex', flexDirection: 'column' as const, gap: '0.2rem' },
   statValue: { fontSize: '1.4rem', fontWeight: 700 },
   statLabel: { fontSize: '0.7rem', color: '#9ca3af', textTransform: 'uppercase' as const, letterSpacing: '0.05em' },
-
   section: { marginBottom: '2rem' },
   sectionTitle: { fontSize: '0.75rem', fontWeight: 600, color: '#9ca3af', textTransform: 'uppercase' as const, letterSpacing: '0.06em', margin: '0 0 0.75rem' },
-
-  // Failing cards
   cardList: { display: 'flex', flexDirection: 'column' as const, gap: '0.75rem' },
-  failCard: {
-    border: '1px solid #fca5a5',
-    borderLeft: '3px solid #dc2626',
-    borderRadius: '6px',
-    padding: '1rem 1.1rem',
-    background: '#fff',
-  } as const,
-  cardTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.6rem' } as const,
+  failCard: { border: '1px solid #fca5a5', borderLeft: '3px solid #dc2626', borderRadius: '6px', padding: '1rem 1.1rem', background: '#fff' } as const,
+  cardTop: { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '0.6rem', gap: '0.5rem' } as const,
   cardLeft: { display: 'flex', flexDirection: 'column' as const, gap: '0.2rem' },
-  cardRight: { display: 'flex', flexDirection: 'column' as const, alignItems: 'flex-end', flexShrink: 0, paddingLeft: '1rem' },
+  cardRight: { display: 'flex', flexDirection: 'column' as const, alignItems: 'flex-end', flexShrink: 0 },
   ip: { fontFamily: 'monospace', fontSize: '0.875rem', color: '#111827' } as const,
   via: { fontSize: '0.75rem', color: '#6b7280' } as const,
   sendingAs: { fontSize: '0.75rem', color: '#9ca3af' } as const,
@@ -200,30 +190,13 @@ const s = {
   msgLabel: { fontSize: '0.7rem', color: '#9ca3af' } as const,
   cardExplain: { margin: '0 0 0.75rem', fontSize: '0.85rem', color: '#374151', lineHeight: 1.6 } as const,
   cardMeta: { display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' as const },
-  spfBadge: (pass: boolean) => ({
-    fontSize: '0.7rem',
-    fontWeight: 600,
-    padding: '0.1rem 0.45rem',
-    borderRadius: '4px',
-    background: pass ? '#dcfce7' : '#fee2e2',
-    color: pass ? '#16a34a' : '#dc2626',
-  }),
-  dkimBadge: (pass: boolean) => ({
-    fontSize: '0.7rem',
-    fontWeight: 600,
-    padding: '0.1rem 0.45rem',
-    borderRadius: '4px',
-    background: pass ? '#dcfce7' : '#fee2e2',
-    color: pass ? '#16a34a' : '#dc2626',
-  }),
+  spfBadge: (pass: boolean) => ({ fontSize: '0.7rem', fontWeight: 600, padding: '0.1rem 0.45rem', borderRadius: '4px', background: pass ? '#dcfce7' : '#fee2e2', color: pass ? '#16a34a' : '#dc2626' }),
+  dkimBadge: (pass: boolean) => ({ fontSize: '0.7rem', fontWeight: 600, padding: '0.1rem 0.45rem', borderRadius: '4px', background: pass ? '#dcfce7' : '#fee2e2', color: pass ? '#16a34a' : '#dc2626' }),
   reporters: { fontSize: '0.75rem', color: '#9ca3af', marginLeft: 'auto' } as const,
-
-  // Passing compact list
   passList: { display: 'flex', flexDirection: 'column' as const, gap: '0' },
   passRow: { display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.5rem 0', borderBottom: '1px solid #f3f4f6' } as const,
   passCheck: { color: '#16a34a', fontWeight: 700, fontSize: '0.875rem', flexShrink: 0 } as const,
   passInfo: { display: 'flex', alignItems: 'baseline', gap: '0.5rem', flex: 1 } as const,
   passCount: { fontSize: '0.8rem', color: '#9ca3af', flexShrink: 0 } as const,
-
   muted: { color: '#9ca3af' } as const,
 };

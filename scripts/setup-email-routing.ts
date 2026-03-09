@@ -2,7 +2,7 @@
 // One-time setup: configures Cloudflare Email Routing for REPORTS_DOMAIN.
 //
 // Usage:
-//   CLOUDFLARE_API_TOKEN=<zone-token> \
+//   CLOUDFLARE_EMAIL_TOKEN=<zone-token> \
 //   CLOUDFLARE_ZONE_ID=<zone-id> \
 //   REPORTS_DOMAIN=reports.yourdomain.com \
 //   WORKER_NAME=inbox-angel-worker \
@@ -16,13 +16,13 @@
 //
 // Token needs: Zone:Read + DNS:Edit + Email Routing:Edit (scoped to zone)
 
-const TOKEN  = process.env.CLOUDFLARE_API_TOKEN;
+const TOKEN  = process.env.CLOUDFLARE_EMAIL_TOKEN;
 const ZONE   = process.env.CLOUDFLARE_ZONE_ID;
 const DOMAIN = process.env.REPORTS_DOMAIN;
 const WORKER = process.env.WORKER_NAME ?? 'inbox-angel-worker';
 
 if (!TOKEN || !ZONE || !DOMAIN) {
-  console.error('Missing required env vars: CLOUDFLARE_API_TOKEN, CLOUDFLARE_ZONE_ID, REPORTS_DOMAIN');
+  console.error('Missing required env vars: CLOUDFLARE_EMAIL_TOKEN, CLOUDFLARE_ZONE_ID, REPORTS_DOMAIN');
   process.exit(1);
 }
 

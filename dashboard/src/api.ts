@@ -40,8 +40,14 @@ export async function getDomainReport(id: number, date: string): Promise<import(
   return res.json();
 }
 
-export async function getDomainExplore(id: number, days = 30): Promise<{ days: number; sources: import('./types').AnomalySource[] }> {
+export async function getDomainExplore(id: number, days = 30): Promise<{ days: number; domain: string; sources: import('./types').AnomalySource[] }> {
   const res = await apiFetch(`/api/domains/${id}/explore?days=${days}`);
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function getCheckResults(): Promise<{ results: import('./types').CheckResult[] }> {
+  const res = await apiFetch('/api/check-results');
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
 }

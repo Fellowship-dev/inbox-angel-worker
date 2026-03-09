@@ -39,6 +39,7 @@ import {
 } from '../db/queries';
 import type { DnsProvisionResult } from '../dns/provision';
 import { provisionDomain, deprovisionDomain, DnsProvisionError } from '../dns/provision';
+import { ensureEmailRouting } from '../setup/email-routing';
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -80,6 +81,15 @@ async function addDomain(request: Request, env: Env, customerId: string): Promis
   }
 
   if (!env.REPORTS_DOMAIN) return err('REPORTS_DOMAIN is not configured', 500);
+
+  // On first domain add, auto-configure email routing (idempotent)
+  const { results: existing } = await getDomainsByCustomer(env.DB, customerId);
+  if (existing.length === 0) {
+    await ensureEmailRouting(env).catch(e =>
+      console.error('[setup] email routing setup failed (non-fatal):', e)
+    );
+  }
+
   // Fixed rua address — routing is by XML policy_domain, not by address encoding
   const ruaAddress = `rua@${env.REPORTS_DOMAIN}`;
 
@@ -291,7 +301,7 @@ async function getDomainReportByDate(env: Env, customerId: string, domainId: str
     getReportSourcesByDate(env.DB, id, date),
   ]);
 
-  return json({ date, summary: summary ?? { total: 0, passed: 0, failed: 0 }, sources });
+  return json({ date, domain: domain.domain, summary: summary ?? { total: 0, passed: 0, failed: 0 }, sources });
 }
 
 async function getDomainSources(env: Env, customerId: string, domainId: string, url: URL): Promise<Response> {
@@ -328,9 +338,10 @@ export async function handleApi(
   // POST /api/check-sessions — generate a unique free-check email for a browser session
   if (path === '/api/check-sessions' && method === 'POST') {
     if (!env.REPORTS_DOMAIN) return err('REPORTS_DOMAIN is not configured', 500);
-    const token = crypto.randomUUID();
-    const checkPrefix = env.CHECK_PREFIX ?? 'check-';
-    return json({ token, email: `${checkPrefix}${token}@${env.REPORTS_DOMAIN}` }, 201);
+    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
+    const token = Array.from(crypto.getRandomValues(new Uint8Array(8)))
+      .map(b => chars[b % chars.length]).join('');
+    return json({ token, email: `${token}@${env.REPORTS_DOMAIN}` }, 201);
   }
 
   // GET /api/check-sessions/:token — poll until the check email has been processed
@@ -423,7 +434,7 @@ export async function handleApi(
       const days = Math.min(isNaN(rawDays) ? 30 : rawDays, 90);
       const since = Math.floor(Date.now() / 1000) - days * 86400;
       const { results } = await getAllSources(env.DB, id, since);
-      return json({ days, sources: results });
+      return json({ days, domain: domain.domain, sources: results });
     }
     // DELETE /api/domains/:id
     const domainDeleteMatch = path.match(/^\/api\/domains\/([^/]+)$/);

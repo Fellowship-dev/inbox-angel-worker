@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'preact/hooks';
 import { getDomains, getDomainStats } from '../api';
 import type { Domain, DomainStats } from '../types';
+import { useIsMobile } from '../hooks';
 
 type Status = 'good' | 'warning' | 'danger';
 
@@ -19,7 +20,7 @@ function computeStatus(policy: Domain['dmarc_policy'], passRate: number | null):
 
 const STATUS_ICON: Record<Status, string> = { good: '●', warning: '▲', danger: '✕' };
 const STATUS_COLOR: Record<Status, string> = { good: '#16a34a', warning: '#d97706', danger: '#dc2626' };
-const POLICY_LABEL: Record<string, string> = { none: 'none', quarantine: 'quarantine', reject: 'reject' };
+const POLICY_LABEL: Record<string, string> = { none: 'none', quarantine: 'quar.', reject: 'reject' };
 
 interface Props {
   onUnauthorized: () => void;
@@ -30,6 +31,7 @@ export function Overview({ onUnauthorized }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hovered, setHovered] = useState<number | null>(null);
+  const mobile = useIsMobile();
 
   useEffect(() => {
     let cancelled = false;
@@ -40,7 +42,6 @@ export function Overview({ onUnauthorized }: Props) {
         const { domains } = await getDomains();
         if (domains.length === 1) { window.location.hash = `#/domains/${domains[0].id}`; return; }
 
-        // Fetch stats for all domains in parallel
         const statsResults = await Promise.allSettled(
           domains.map((d) => getDomainStats(d.id, 7))
         );
@@ -81,16 +82,17 @@ export function Overview({ onUnauthorized }: Props) {
   return (
     <div>
       {/* Summary strip */}
-      <div style={styles.summary}>
+      <div style={{ ...styles.summary, flexWrap: 'wrap', gap: mobile ? '0.75rem' : '1.5rem' }}>
         <span><strong>{rows.length}</strong> domain{rows.length !== 1 ? 's' : ''}</span>
         <span style={{ color: STATUS_COLOR.good }}><strong>{protected_}</strong> protected</span>
         {needsAction > 0 && (
           <span style={{ color: STATUS_COLOR.danger }}><strong>{needsAction}</strong> needs action</span>
         )}
-        <a href="#/add" style={styles.addBtn}>+ Add domain</a>
+        <a href="#/add" style={{ ...styles.addBtn, marginLeft: mobile ? '0' : 'auto', marginTop: mobile ? '0.25rem' : '0' }}>
+          + Add domain
+        </a>
       </div>
 
-      {/* Domain list */}
       {loading && <p style={styles.muted}>Loading…</p>}
       {error && <p style={{ color: STATUS_COLOR.danger }}>{error === '401' ? 'Unauthorized — set your API key.' : `Error: ${error}`}</p>}
 
@@ -112,17 +114,20 @@ export function Overview({ onUnauthorized }: Props) {
           <span style={{ color: STATUS_COLOR[status], width: '1rem', flexShrink: 0 }}>
             {STATUS_ICON[status]}
           </span>
-          <span style={{ flex: 1, fontWeight: 500 }}>{domain.domain}</span>
+          <span style={{ flex: 1, fontWeight: 500, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {domain.domain}
+          </span>
           <span style={styles.badge}>
             {domain.dmarc_policy ? POLICY_LABEL[domain.dmarc_policy] : '—'}
           </span>
-          <span style={{ ...styles.muted, width: '6rem', textAlign: 'right' }}>
-            {passRate !== null ? `${Math.round(passRate * 100)}% pass` : '—'}
-          </span>
+          {!mobile && (
+            <span style={{ ...styles.muted, width: '5rem', textAlign: 'right' }}>
+              {passRate !== null ? `${Math.round(passRate * 100)}% pass` : '—'}
+            </span>
+          )}
           <span style={styles.muted}>→</span>
         </div>
       ))}
-
     </div>
   );
 }
@@ -130,6 +135,7 @@ export function Overview({ onUnauthorized }: Props) {
 const styles = {
   summary: {
     display: 'flex',
+    alignItems: 'center',
     gap: '1.5rem',
     padding: '1rem 0',
     borderBottom: '1px solid #e5e7eb',
@@ -139,7 +145,7 @@ const styles = {
   row: {
     display: 'flex',
     alignItems: 'center',
-    gap: '1rem',
+    gap: '0.75rem',
     padding: '0.85rem 0.75rem',
     borderBottom: '1px solid #f3f4f6',
     cursor: 'pointer',
@@ -152,15 +158,13 @@ const styles = {
     borderRadius: '4px',
     background: '#f3f4f6',
     color: '#374151',
-    width: '6rem',
-    textAlign: 'center' as const,
-  },
+    flexShrink: 0,
+  } as const,
   muted: {
     color: '#9ca3af',
     fontSize: '0.875rem',
   } as const,
   addBtn: {
-    marginLeft: 'auto',
     padding: '0.3rem 0.75rem',
     background: '#111827',
     color: '#fff',
@@ -170,6 +174,8 @@ const styles = {
     fontWeight: 600,
     cursor: 'pointer',
     textDecoration: 'none',
+    display: 'inline-block',
+    flexShrink: 0,
   } as const,
   empty: {
     padding: '3rem 0',

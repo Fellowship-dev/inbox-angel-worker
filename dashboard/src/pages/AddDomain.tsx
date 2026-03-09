@@ -178,6 +178,7 @@ const s = {
     borderRadius: '8px',
     fontSize: '1.1rem',
     outline: 'none',
+    width: '100%',
     boxSizing: 'border-box' as const,
   },
   error: {
@@ -240,9 +241,10 @@ const s = {
     letterSpacing: '0.05em',
     marginBottom: '0.35rem',
   },
-  fieldRow: { display: 'flex', alignItems: 'center', gap: '0.5rem' } as const,
+  fieldRow: { display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' as const },
   fieldValue: {
     flex: 1,
+    minWidth: '60%',
     fontFamily: 'monospace',
     fontSize: '0.875rem',
     color: '#111827',

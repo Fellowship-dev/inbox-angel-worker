@@ -28,14 +28,23 @@
 	//      • Email Routing Rules : Edit  ← enable routing, set catch-all rule
 	//      • DNS                 : Edit  ← MX records for subdomain + per-customer TXT records
 	//      • Workers Routes      : Edit
-	//    Run once: npx tsx scripts/setup-email-routing.ts  (uses CLOUDFLARE_EMAIL_TOKEN + CLOUDFLARE_ZONE_ID)
+	//    Run once: CLOUDFLARE_EMAIL_TOKEN=<token> CLOUDFLARE_ZONE_ID=<zone> REPORTS_DOMAIN=<domain> npx tsx scripts/setup-email-routing.ts
 	//      → enables Email Routing on the zone
 	//      → adds MX records for REPORTS_DOMAIN subdomain
 	//      → sets catch-all rule: *@REPORTS_DOMAIN → this Worker
+	//    After running, update your domain's DMARC record — append rua, don't replace:
+	//      _dmarc.yourdomain.com TXT "v=DMARC1; p=none; rua=mailto:<existing>,mailto:rua@REPORTS_DOMAIN"
 	//    Then store as runtime secret: wrangler secret put CLOUDFLARE_API_TOKEN
 	//      (runtime token = EMAIL token — deploy token is only needed locally/CI)
 	//
-	// 7. Run: wrangler secret put API_KEY  (your chosen dashboard auth key)
+	// 7. Set all secrets (run each, paste value when prompted):
+	//      wrangler secret put API_KEY              ← your chosen dashboard auth key
+	//      wrangler secret put CLOUDFLARE_API_TOKEN ← EMAIL token (from step above)
+	//      wrangler secret put REPORTS_DOMAIN       ← e.g. reports.yourdomain.com
+	//      wrangler secret put FROM_EMAIL           ← e.g. noreply@reports.yourdomain.com
+	//      wrangler secret put CUSTOMER_DOMAIN      ← your root domain (e.g. yourdomain.com)
+	//      wrangler secret put CUSTOMER_EMAIL       ← your email address
+	//      wrangler secret put CUSTOMER_NAME        ← your org display name
 	// 8. Create workers.dev subdomain (required for cron scheduling — no dashboard visit needed):
 	//      curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/<account_id>/workers/subdomain" \
 	//        -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
@@ -88,18 +97,20 @@
 	},
 
 	// Environment variables — secrets go via: wrangler secret put <NAME>
+	// Secrets (never in vars): API_KEY, CLOUDFLARE_API_TOKEN (EMAIL token), RESEND_API_KEY
 	"vars": {
 		"AUTH0_DOMAIN": "",           // empty = bypass mode, use API_KEY header instead
-		"API_KEY": "demo",            // dev only — in production use: wrangler secret put API_KEY
 		"AUTH0_AUDIENCE": "",         // e.g. "https://api.yourdomain.com"
-		"CLOUDFLARE_ACCOUNT_ID": "",  // optional: only needed for auto DNS provisioning
-		"CLOUDFLARE_ZONE_ID": "",     // optional: zone ID of the domain receiving reports
-		"REPORTS_DOMAIN": "",         // REQUIRED: e.g. "reports.yourdomain.com"
-		"CHECK_PREFIX": "check-",     // prefix for free-check addresses (optional)
-		"FROM_EMAIL": "",             // REQUIRED: reply-from for free-check emails
-		"RESEND_API_KEY": "",         // optional: transactional email for monitor alerts
-		"CUSTOMER_DOMAIN": "",        // self-hosted: your domain (auto-provisioned on first request)
-		"CUSTOMER_EMAIL": "",         // self-hosted: alert + report recipient
-		"CUSTOMER_NAME": ""           // self-hosted: display name (default: "Self-hosted")
+		"CLOUDFLARE_ACCOUNT_ID": "f8a1abc24625b0ca9f9e34d87395c67c",
+		"CLOUDFLARE_ZONE_ID": "690972fb988fcd672204dabbaad64c47",
+		"WORKER_NAME": "inbox-angel-worker"  // must match the "name" field above
+		// Secrets (set via wrangler secret put):
+		//   API_KEY              — dashboard auth key
+		//   CLOUDFLARE_API_TOKEN — EMAIL token (email routing + DNS writes)
+		//   REPORTS_DOMAIN       — e.g. reports.yourdomain.com
+		//   FROM_EMAIL           — e.g. noreply@reports.yourdomain.com
+		//   CUSTOMER_DOMAIN      — your domain (auto-provisions customer on first request)
+		//   CUSTOMER_EMAIL       — your email
+		//   CUSTOMER_NAME        — display name
 	}
 }

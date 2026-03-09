@@ -1,0 +1,24 @@
+# InboxAngel Worker — required secrets
+# Copy to .dev.vars for local development, or set via: wrangler secret put <NAME>
+
+# Dashboard auth key — choose any strong random string
+API_KEY=
+
+# Cloudflare API token with DNS:Edit + Email Routing Rules:Edit for your zone
+CLOUDFLARE_API_TOKEN=
+
+# The subdomain that will receive DMARC reports and free-check emails
+# Must be on your Cloudflare zone (e.g. reports.yourdomain.com)
+REPORTS_DOMAIN=
+
+# From address for outbound notification emails
+FROM_EMAIL=
+
+# Your domain — auto-provisions your account on first authenticated request
+CUSTOMER_DOMAIN=
+
+# Your email address — receives monitoring alerts and weekly digests
+CUSTOMER_EMAIL=
+
+# Display name shown in the dashboard
+CUSTOMER_NAME=

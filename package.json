@@ -1,8 +1,9 @@
 {
 	"name": "inbox-angel-worker",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"private": true,
 	"scripts": {
+		"predeploy": "wrangler d1 migrations apply DB --remote",
 		"deploy": "npm run build:dashboard && wrangler deploy",
 		"dev": "wrangler dev",
 		"dev:dashboard": "npm --prefix dashboard run dev",
@@ -10,7 +11,11 @@
 		"start": "wrangler dev",
 		"test": "vitest --config vitest.node.config.mts",
 		"test:workers": "vitest --config vitest.config.mts",
-		"cf-typegen": "wrangler types"
+		"cf-typegen": "wrangler types",
+		"seed:local": "npx tsx scripts/seed-demo.ts > /tmp/ia-seed.sql && wrangler d1 execute inbox-angel --local  --file=/tmp/ia-seed.sql; rm -f /tmp/ia-seed.sql",
+		"seed:remote": "npx tsx scripts/seed-demo.ts > /tmp/ia-seed.sql && wrangler d1 execute inbox-angel --remote --file=/tmp/ia-seed.sql; rm -f /tmp/ia-seed.sql",
+		"unseed:local": "wrangler d1 execute inbox-angel --local  --file=scripts/unseed-demo.sql",
+		"unseed:remote": "wrangler d1 execute inbox-angel --remote --file=scripts/unseed-demo.sql"
 	},
 	"devDependencies": {
 		"@cloudflare/vitest-pool-workers": "^0.12.4",

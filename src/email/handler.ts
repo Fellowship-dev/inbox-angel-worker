@@ -3,8 +3,8 @@ import { handleFreeCheck } from './free-check';
 import { handleDmarcReport } from './dmarc-report';
 
 // Routes inbound email by recipient address local part:
-//   check-{token}@reports.yourdomain.com  → free SPF/DKIM/DMARC check (session-based)
-//   anything else                         → DMARC RUA aggregate report (routed by XML content)
+//   rua@reports.yourdomain.com  → DMARC RUA aggregate report (routed by XML content)
+//   {token}@reports.yourdomain.com  → free SPF/DKIM/DMARC check (8-char random token)
 export async function handleEmail(
   message: ForwardableEmailMessage,
   env: Env,
@@ -13,12 +13,11 @@ export async function handleEmail(
   const to = message.to.toLowerCase();
   const localPart = to.split('@')[0];
 
-  const checkPrefix = env.CHECK_PREFIX ?? 'check-';
-  if (localPart.startsWith(checkPrefix)) {
-    const token = localPart.slice(checkPrefix.length);
-    await handleFreeCheck(message, env, token);
-  } else {
+  if (localPart === 'rua') {
     // RUA report — customer is resolved from the policy_domain in the XML
     await handleDmarcReport(message, env);
+  } else {
+    // Session-based check — local part is the 8-char token
+    await handleFreeCheck(message, env, localPart);
   }
 }

@@ -15,8 +15,8 @@ export interface Env {
   CLOUDFLARE_ACCOUNT_ID?: string;
   CLOUDFLARE_ZONE_ID?: string;
   CLOUDFLARE_API_TOKEN?: string; // secret — optional; omit to provision DNS manually
+  WORKER_NAME?: string;          // defaults to "inbox-angel-worker"; used for email routing catch-all rule
   REPORTS_DOMAIN: string;        // e.g. "reports.inboxangel.io" — REQUIRED, no default
-  CHECK_PREFIX?: string;         // free-check address prefix, default "check-"
   FROM_EMAIL: string;
   RESEND_API_KEY?: string;       // transactional email for monitor alerts (optional — logs if unset)
   // Self-hosted single-tenant init — set these before first deploy; auto-provisions on first request

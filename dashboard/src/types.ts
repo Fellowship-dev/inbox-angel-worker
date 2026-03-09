@@ -57,8 +57,26 @@ export interface AnomalySource {
   last_seen: string;  // YYYY-MM-DD
 }
 
+export interface CheckResult {
+  id: number;
+  from_email: string;
+  from_domain: string;
+  spf_result: string | null;
+  spf_domain: string | null;
+  spf_record: string | null;
+  dkim_result: string | null;
+  dkim_domain: string | null;
+  dmarc_result: string | null;
+  dmarc_policy: string | null;
+  dmarc_record: string | null;
+  overall_status: 'protected' | 'at_risk' | 'exposed';
+  session_token: string | null;
+  created_at: number;
+}
+
 export interface DayReport {
   date: string;
+  domain: string;
   summary: { total: number; passed: number; failed: number };
   sources: ReportSource[];
 }
