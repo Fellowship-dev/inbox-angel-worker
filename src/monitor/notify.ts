@@ -40,7 +40,7 @@ function buildEmailBody(domain: string, changes: DomainChange[], reportsDomain: 
 
   lines.push('—');
   lines.push('InboxAngel domain monitoring');
-  lines.push(`To stop alerts for ${domain}, reply with "unsubscribe".`);
+  lines.push(`To manage alerts for ${domain}: open your dashboard → Domains → ${domain} → Settings.`);
 
   return lines.join('\n');
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
-import { getDomains, deleteDomain } from '../api';
+import { getDomains, deleteDomain, getMonitorSubs, setMonitorSubActive } from '../api';
+import type { MonitorSub } from '../api';
 import type { Domain } from '../types';
 
 interface Props {
@@ -33,16 +34,22 @@ function CopyField({ label, value }: { label: string; value: string }) {
 
 export function DomainSettings({ id, onUnauthorized }: Props) {
   const [domain, setDomain] = useState<Domain | null>(null);
+  const [subs, setSubs] = useState<MonitorSub[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [togglingId, setTogglingId] = useState<number | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    getDomains()
-      .then(({ domains }) => { if (!cancelled) setDomain(domains.find(d => d.id === id) ?? null); })
+    Promise.all([getDomains(), getMonitorSubs(id)])
+      .then(([{ domains }, { subs }]) => {
+        if (cancelled) return;
+        setDomain(domains.find(d => d.id === id) ?? null);
+        setSubs(subs);
+      })
       .catch((e) => {
         if (cancelled) return;
         if (e.message === '401') { onUnauthorized(); return; }
@@ -51,6 +58,16 @@ export function DomainSettings({ id, onUnauthorized }: Props) {
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [id]);
+
+  const toggleSub = async (sub: MonitorSub) => {
+    setTogglingId(sub.id);
+    try {
+      await setMonitorSubActive(sub.id, !sub.active);
+      setSubs(prev => prev.map(s => s.id === sub.id ? { ...s, active: sub.active ? 0 : 1 } : s));
+    } catch { /* ignore */ } finally {
+      setTogglingId(null);
+    }
+  };
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -110,6 +127,41 @@ export function DomainSettings({ id, onUnauthorized }: Props) {
             Download CSV
           </a>
         </div>
+      </section>
+
+      {/* Monitoring alerts */}
+      <section style={s.section}>
+        <h3 style={s.sectionTitle}>Monitoring alerts</h3>
+        {subs.length === 0 ? (
+          <div style={s.card}>
+            <p style={{ ...s.exportDesc, paddingBottom: '0.85rem' }}>
+              No active monitoring subscriptions for this domain yet. They're created automatically when someone runs a free email check and opts in to alerts.
+            </p>
+          </div>
+        ) : (
+          <div style={s.card}>
+            {subs.map((sub, i) => (
+              <div key={sub.id}>
+                {i > 0 && <div style={s.divider} />}
+                <div style={s.infoRow}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={s.infoText}>{sub.email}</div>
+                    <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: '0.15rem' }}>
+                      {sub.active ? 'Receiving alerts' : 'Alerts paused'}
+                    </div>
+                  </div>
+                  <button
+                    style={{ ...s.copyBtn, background: sub.active ? '#6b7280' : '#111827', opacity: togglingId === sub.id ? 0.5 : 1 }}
+                    onClick={() => toggleSub(sub)}
+                    disabled={togglingId === sub.id}
+                  >
+                    {sub.active ? 'Pause' : 'Resume'}
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </section>
 
       {/* Danger zone */}

@@ -69,3 +69,25 @@ export async function deleteDomain(id: number): Promise<void> {
   const res = await apiFetch(`/api/domains/${id}`, { method: 'DELETE' });
   if (!res.ok) throw new Error(`${res.status}`);
 }
+
+export interface MonitorSub {
+  id: number;
+  email: string;
+  domain: string;
+  active: number;
+  created_at: number;
+}
+
+export async function getMonitorSubs(domainId: number): Promise<{ subs: MonitorSub[] }> {
+  const res = await apiFetch(`/api/domains/${domainId}/monitor-subs`);
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function setMonitorSubActive(subId: number, active: boolean): Promise<void> {
+  const res = await apiFetch(`/api/monitor-subs/${subId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ active }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+}

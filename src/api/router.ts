@@ -36,6 +36,9 @@ import {
   getDomainExportData,
   getAnomalySources,
   getAllSources,
+  getSetting,
+  getMonitorSubsByDomain,
+  setMonitorSubActive,
 } from '../db/queries';
 import type { DnsProvisionResult } from '../dns/provision';
 import { provisionDomain, deprovisionDomain, DnsProvisionError } from '../dns/provision';
@@ -413,11 +416,21 @@ export async function handleApi(
     return json({ domain: checkResult.from_domain, email: body.email }, 201);
   }
 
+  // GET /api/init-key — returns the auto-generated API key (only when API_KEY env is not set)
+  // Used by the dashboard on first load to pre-fill the API key gate.
+  if (path === '/api/init-key' && method === 'GET') {
+    if (env.API_KEY) return err('not found', 404); // manual key configured — no auto-key needed
+    const row = await getSetting(env.DB!, 'auto_api_key');
+    if (!row) return err('not found', 404);
+    return json({ key: row.value });
+  }
+
   // GET /api/domains/:id/export — query-param auth for download links
   const exportMatch = path.match(/^\/api\/domains\/([^/]+)\/export$/);
   if (exportMatch && method === 'GET') {
     const key = url.searchParams.get('key');
-    if (!key || !env.API_KEY || key !== env.API_KEY) return err('unauthorized', 401);
+    const effectiveKey = env.API_KEY ?? (await getSetting(env.DB!, 'auto_api_key'))?.value;
+    if (!key || !effectiveKey || key !== effectiveKey) return err('unauthorized', 401);
     return await exportDomainData(env, key, exportMatch[1]);
   }
 
@@ -426,9 +439,12 @@ export async function handleApi(
     return err('not found', 404);
   }
 
+  // Resolve effective API key: env secret takes priority, fall back to auto-generated DB key
+  const effectiveApiKey = env.API_KEY ?? (await getSetting(env.DB!, 'auto_api_key'))?.value;
+
   let customerId: string;
   try {
-    const ctx = await requireAuth(request, env);
+    const ctx = await requireAuth(request, { ...env, API_KEY: effectiveApiKey });
     customerId = ctx.customerId;
     debug(env, 'auth.ok', { method, path, customerId, mode: env.AUTH0_DOMAIN ? 'jwt' : 'api-key' });
   } catch (e) {
@@ -494,6 +510,24 @@ export async function handleApi(
     // GET /api/check-results
     if (path === '/api/check-results' && method === 'GET') {
       return await getCheckResults(env, customerId);
+    }
+
+    // GET /api/domains/:id/monitor-subs — list monitoring subscriptions for a domain
+    const monitorSubsMatch = path.match(/^\/api\/domains\/(\d+)\/monitor-subs$/);
+    if (monitorSubsMatch && method === 'GET') {
+      const domain = await getDomainById(env.DB, parseInt(monitorSubsMatch[1], 10));
+      if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+      const { results } = await getMonitorSubsByDomain(env.DB, domain.domain);
+      return json({ subs: results });
+    }
+
+    // PATCH /api/monitor-subs/:id — toggle active status
+    const monitorSubPatchMatch = path.match(/^\/api\/monitor-subs\/(\d+)$/);
+    if (monitorSubPatchMatch && method === 'PATCH') {
+      const body = await parseBody<{ active?: boolean }>(request);
+      if (typeof body.active !== 'boolean') return err('active (boolean) is required', 400);
+      await setMonitorSubActive(env.DB, parseInt(monitorSubPatchMatch[1], 10), body.active);
+      return json({ ok: true });
     }
 
     return err('not found', 404);

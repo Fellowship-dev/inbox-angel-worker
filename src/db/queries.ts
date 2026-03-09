@@ -343,6 +343,24 @@ export function getDomainExportData(db: D1Database, domainId: number) {
   `).bind(domainId).all<ExportRow>();
 }
 
+// ── Settings ─────────────────────────────────────────────────
+
+export function getSetting(db: D1Database, key: string) {
+  return db.prepare(`SELECT value FROM settings WHERE key = ?`).bind(key).first<{ value: string }>();
+}
+
+// ── Monitor Subscriptions (management) ───────────────────────
+
+export function getMonitorSubsByDomain(db: D1Database, domain: string) {
+  return db.prepare(`SELECT * FROM monitor_subscriptions WHERE domain = ? ORDER BY created_at`)
+    .bind(domain).all<MonitorSubscription>();
+}
+
+export function setMonitorSubActive(db: D1Database, id: number, active: boolean) {
+  return db.prepare(`UPDATE monitor_subscriptions SET active = ? WHERE id = ?`)
+    .bind(active ? 1 : 0, id).run();
+}
+
 // ── Report Records ───────────────────────────────────────────
 
 export function insertReportRecords(db: D1Database, records: Omit<ReportRecord, 'id' | 'created_at'>[]) {

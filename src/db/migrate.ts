@@ -126,6 +126,17 @@ const MIGRATIONS: { version: number; sql: string }[] = [
       CREATE INDEX IF NOT EXISTS idx_monitor_domain ON monitor_subscriptions(domain);
     `,
 	},
+	{
+		// Key-value settings store — used for auto-generated API key and future config
+		version: 5,
+		sql: `
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+    `,
+	},
 ];
 
 let migrated = false;
@@ -156,6 +167,14 @@ export async function ensureMigrated(db: D1Database): Promise<void> {
 				.run();
 			console.log(`[migrate] applied migration ${m.version}`);
 		}
+	}
+
+	// Auto-generate an API key if none exists yet (used when API_KEY env var is not set)
+	const existing = await db.prepare(`SELECT value FROM settings WHERE key = 'auto_api_key'`).first<{ value: string }>();
+	if (!existing) {
+		const autoKey = crypto.randomUUID();
+		await db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES ('auto_api_key', ?)`).bind(autoKey).run();
+		console.log('[migrate] auto API key generated');
 	}
 
 	migrated = true;
