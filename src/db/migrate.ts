@@ -170,6 +170,19 @@ const MIGRATIONS: { version: number; sql: string }[] = [
       );
     `,
 	},
+	{
+		// Password reset tokens — emailed to user, expire in 1 hour
+		version: 8,
+		sql: `
+      CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        token TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        expires_at INTEGER NOT NULL,
+        used_at INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS idx_prt_user ON password_reset_tokens(user_id);
+    `,
+	},
 ];
 
 let migrated = false;

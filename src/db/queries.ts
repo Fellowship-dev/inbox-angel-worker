@@ -432,6 +432,28 @@ export function markInviteUsed(db: D1Database, token: string) {
   return db.prepare(`UPDATE invites SET used_at = unixepoch() WHERE token = ?`).bind(token).run();
 }
 
+// ── Password Reset Tokens ────────────────────────────────────
+
+export interface PasswordResetToken {
+  token: string;
+  user_id: string;
+  expires_at: number;
+  used_at: number | null;
+}
+
+export function insertPasswordResetToken(db: D1Database, token: string, userId: string, expiresAt: number) {
+  return db.prepare(`INSERT INTO password_reset_tokens (token, user_id, expires_at) VALUES (?, ?, ?)`)
+    .bind(token, userId, expiresAt).run();
+}
+
+export function getPasswordResetToken(db: D1Database, token: string) {
+  return db.prepare(`SELECT * FROM password_reset_tokens WHERE token = ?`).bind(token).first<PasswordResetToken>();
+}
+
+export function markResetTokenUsed(db: D1Database, token: string) {
+  return db.prepare(`UPDATE password_reset_tokens SET used_at = unixepoch() WHERE token = ?`).bind(token).run();
+}
+
 // ── Report Records ───────────────────────────────────────────
 
 export function insertReportRecords(db: D1Database, records: Omit<ReportRecord, 'id' | 'created_at'>[]) {

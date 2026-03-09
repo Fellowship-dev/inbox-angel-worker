@@ -12,6 +12,7 @@ interface Props {
 
 export function AuthGate({ onSave }: Props) {
   const [status, setStatus] = useState<AuthStatus | null>(null);
+  const [view, setView] = useState<'auth' | 'forgot' | 'forgot-sent'>('auth');
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -70,10 +71,74 @@ export function AuthGate({ onSave }: Props) {
     }
   };
 
+  const submitForgot = async (e: Event) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      await fetch('/api/auth/forgot', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      setView('forgot-sent');
+    } catch {
+      setError('Network error — please try again');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   if (!status) {
     return (
       <div style={s.wrap}>
         <div style={s.box}><p style={s.muted}>Loading…</p></div>
+      </div>
+    );
+  }
+
+  if (view === 'forgot') {
+    return (
+      <div style={s.wrap}>
+        <form onSubmit={submitForgot} style={s.box}>
+          <div style={s.logo}>🪄 InboxAngel</div>
+          <h1 style={s.title}>Reset password</h1>
+          <p style={s.subtitle}>Enter your email and we'll send you a reset link.</p>
+          <label style={s.label}>
+            Email
+            <input
+              type="email"
+              placeholder="you@yourcompany.com"
+              value={email}
+              onInput={e => setEmail((e.target as HTMLInputElement).value)}
+              style={s.input}
+              required
+              autoFocus
+            />
+          </label>
+          {error && <p style={s.error}>{error}</p>}
+          <button type="submit" style={s.btn} disabled={loading}>
+            {loading ? '…' : 'Send reset link →'}
+          </button>
+          <button type="button" onClick={() => { setView('auth'); setError(''); }} style={s.link}>
+            ← Back to sign in
+          </button>
+        </form>
+      </div>
+    );
+  }
+
+  if (view === 'forgot-sent') {
+    return (
+      <div style={s.wrap}>
+        <div style={s.box}>
+          <div style={s.logo}>🪄 InboxAngel</div>
+          <h1 style={s.title}>Check your inbox</h1>
+          <p style={s.subtitle}>If an account exists for <strong>{email}</strong>, we've sent a reset link. It expires in 1 hour.</p>
+          <button type="button" onClick={() => { setView('auth'); setError(''); }} style={s.link}>
+            ← Back to sign in
+          </button>
+        </div>
       </div>
     );
   }
@@ -170,11 +235,9 @@ export function AuthGate({ onSave }: Props) {
         </button>
 
         {!isSetup && (
-          <p style={s.forgotHint}>
-            Forgot your password? You can reset it by running{' '}
-            <code style={s.code}>wrangler d1 execute DB --remote --command "DELETE FROM settings WHERE key='password_hash'"</code>{' '}
-            then refreshing this page.
-          </p>
+          <button type="button" onClick={() => { setView('forgot'); setError(''); }} style={s.link}>
+            Forgot your password?
+          </button>
         )}
       </form>
     </div>
@@ -243,19 +306,15 @@ const s = {
     cursor: 'pointer',
     marginTop: '0.25rem',
   } as const,
-  forgotHint: {
-    margin: 0,
-    fontSize: '0.75rem',
-    color: '#9ca3af',
-    lineHeight: 1.6,
+  link: {
+    background: 'none',
+    border: 'none',
+    padding: 0,
+    fontSize: '0.8rem',
+    color: '#6b7280',
+    cursor: 'pointer',
+    textAlign: 'center' as const,
+    textDecoration: 'underline',
   } as const,
-  code: {
-    fontFamily: 'monospace',
-    fontSize: '0.7rem',
-    background: '#f3f4f6',
-    padding: '1px 4px',
-    borderRadius: '3px',
-    wordBreak: 'break-all' as const,
-  },
   muted: { color: '#9ca3af', fontSize: '0.875rem' } as const,
 };

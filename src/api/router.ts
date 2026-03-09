@@ -49,6 +49,9 @@ import {
   getInvite,
   insertInvite,
   markInviteUsed,
+  insertPasswordResetToken,
+  getPasswordResetToken,
+  markResetTokenUsed,
 } from '../db/queries';
 import { hashPassword, verifyPassword } from './password';
 import type { DnsProvisionResult } from '../dns/provision';
@@ -476,6 +479,60 @@ export async function handleApi(
     const token = crypto.randomUUID();
     await setUserSession(env.DB!, user.id, token);
     return json({ token });
+  }
+
+  // POST /api/auth/forgot — generate reset token + send email
+  if (path === '/api/auth/forgot' && method === 'POST') {
+    const body = await parseBody<{ email?: string }>(request);
+    if (!body.email) return err('email is required', 400);
+
+    const user = await getUserByEmail(env.DB!, body.email.toLowerCase().trim());
+    // Always return 200 — don't reveal whether email exists
+    if (user) {
+      const token = crypto.randomUUID();
+      const expiresAt = Math.floor(Date.now() / 1000) + 3600; // 1 hour
+      await insertPasswordResetToken(env.DB!, token, user.id, expiresAt);
+
+      const origin = new URL(request.url).origin;
+      const resetUrl = `${origin}/#/reset/${token}`;
+      const emailBody = `Hi ${user.name},\n\nYou requested a password reset for your InboxAngel account.\n\nClick the link below to set a new password (expires in 1 hour):\n${resetUrl}\n\nIf you didn't request this, ignore this email — your password won't change.\n\nInboxAngel`;
+
+      if (env.SEND_EMAIL && env.FROM_EMAIL) {
+        try {
+          await env.SEND_EMAIL.send({
+            from: { name: 'InboxAngel', email: env.FROM_EMAIL },
+            to: [user.email],
+            subject: 'Reset your InboxAngel password',
+            text: emailBody,
+          });
+        } catch (e) {
+          console.error('[auth] reset email send failed:', e);
+        }
+      } else {
+        console.log(`[auth] reset link for ${user.email}: ${resetUrl}`);
+      }
+    }
+    return json({ ok: true });
+  }
+
+  // POST /api/auth/reset — set new password using reset token
+  if (path === '/api/auth/reset' && method === 'POST') {
+    const body = await parseBody<{ token?: string; password?: string }>(request);
+    if (!body.token || !body.password) return err('token and password are required', 400);
+    if (body.password.length < 8) return err('password must be at least 8 characters', 400);
+
+    const resetToken = await getPasswordResetToken(env.DB!, body.token);
+    if (!resetToken || resetToken.used_at || resetToken.expires_at < Math.floor(Date.now() / 1000)) {
+      return err('reset link is invalid or has expired', 400);
+    }
+
+    const hash = await hashPassword(body.password);
+    const sessionToken = crypto.randomUUID();
+    await env.DB!.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).bind(hash, resetToken.user_id).run();
+    await setUserSession(env.DB!, resetToken.user_id, sessionToken);
+    await markResetTokenUsed(env.DB!, body.token);
+
+    return json({ token: sessionToken });
   }
 
   // GET /api/invites/:token — get invite info (unauthenticated, for the accept page)

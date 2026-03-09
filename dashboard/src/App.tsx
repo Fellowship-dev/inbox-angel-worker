@@ -9,6 +9,7 @@ import { Explore } from './pages/Explore';
 import { EmailCheck } from './pages/EmailCheck';
 import { Team } from './pages/Team';
 import { AcceptInvite } from './pages/AcceptInvite';
+import { ResetPassword } from './pages/ResetPassword';
 import { AuthGate } from './AuthGate';
 import { getVersion, type VersionInfo } from './api';
 
@@ -58,10 +59,14 @@ export function App() {
   const [update, setUpdate] = useState<VersionInfo | null>(null);
   const handleUnauth = () => { localStorage.removeItem('ia_api_key'); setHasKey(false); };
 
-  // Invite route: must be handled before auth gate
+  // Unauthenticated routes — must be checked before auth gate
   const inviteMatch = route.match(/^\/invite\/(.+)$/);
   if (inviteMatch) {
     return <AcceptInvite token={inviteMatch[1]} onAccepted={() => setHasKey(true)} />;
+  }
+  const resetMatch = route.match(/^\/reset\/(.+)$/);
+  if (resetMatch) {
+    return <ResetPassword token={resetMatch[1]} onReset={() => { setHasKey(true); window.location.hash = '/'; }} />;
   }
 
   useEffect(() => {
