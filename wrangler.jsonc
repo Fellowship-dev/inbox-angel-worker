@@ -76,10 +76,19 @@
 		}
 	],
 
-	// Email Worker — catch-all on REPORTS_DOMAIN
+	// Email Worker — catch-all on REPORTS_DOMAIN (inbound)
 	"email": [
 		{
 			"name": "EMAIL"
+		}
+	],
+
+	// Outbound email — requires CF Email Routing enabled on your zone.
+	// Recipients must be verified destination addresses in CF Email Routing.
+	// For self-hosting: verify your CUSTOMER_EMAIL in CF dashboard → Email → Routing → Destinations.
+	"send_email": [
+		{
+			"name": "SEND_EMAIL"
 		}
 	],
 
@@ -97,7 +106,7 @@
 	},
 
 	// Environment variables — secrets go via: wrangler secret put <NAME>
-	// Secrets (never in vars): API_KEY, CLOUDFLARE_API_TOKEN (EMAIL token), RESEND_API_KEY
+	// Secrets (never in vars): API_KEY, CLOUDFLARE_API_TOKEN (EMAIL token)
 	"vars": {
 		"AUTH0_DOMAIN": "",           // empty = bypass mode, use API_KEY header instead
 		"AUTH0_AUDIENCE": "",         // e.g. "https://api.yourdomain.com"

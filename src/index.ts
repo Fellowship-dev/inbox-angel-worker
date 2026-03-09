@@ -18,9 +18,9 @@ export interface Env {
   WORKER_NAME?: string;          // defaults to "inbox-angel-worker"; used for email routing catch-all rule
   TELEMETRY_ENABLED?: string;    // "true" to send anonymous usage events to InboxAngel (default: off)
   DEBUG?: string;                // "true" to enable verbose logging to Cloudflare Workers Logs (default: off)
+  SEND_EMAIL?: SendEmail;        // CF Email Workers outbound binding — logs if unset (wrangler dev has no local support)
   REPORTS_DOMAIN: string;        // e.g. "reports.inboxangel.io" — REQUIRED, no default
   FROM_EMAIL: string;
-  RESEND_API_KEY?: string;       // transactional email for monitor alerts (optional — logs if unset)
   // Self-hosted single-tenant init — set these before first deploy; auto-provisions on first request
   CUSTOMER_DOMAIN?: string;      // e.g. "yourdomain.com"
   CUSTOMER_EMAIL?: string;       // alert and report recipient

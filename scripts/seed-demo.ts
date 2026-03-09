@@ -2,8 +2,10 @@
 // Generates demo seed SQL for InboxAngel.
 //
 // Usage:
-//   npx tsx scripts/seed-demo.ts | wrangler d1 execute inbox-angel --local --file=-
-//   npx tsx scripts/seed-demo.ts | wrangler d1 execute inbox-angel --remote --file=-
+//   npm run seed:local    — seed local D1
+//   npm run seed:remote   — seed remote D1
+//   npm run unseed:local  — wipe demo data locally
+//   npm run unseed:remote — wipe demo data remotely
 //
 // Creates three demo domains that tell a story:
 //   acme.com       — enforced (reject, 96% pass) — the goal

@@ -2,7 +2,9 @@
 // Runs every Monday (cron "0 9 * * 1") and sends a per-customer summary of
 // the past 7 days of DMARC aggregate reports.
 //
-// Delivery: Resend API if RESEND_API_KEY is set, console.log otherwise.
+// Delivery: Cloudflare Email Workers (SEND_EMAIL binding).
+// Recipients must be verified destination addresses in CF Email Routing.
+// Falls back to console.log if binding is absent (wrangler dev has no local send_email support).
 
 import { getAllCustomers, getWeeklyDomainStats, getTopFailingSources, DomainWeeklyStat, FailingSource } from '../db/queries';
 import { version } from '../../package.json';
@@ -23,7 +25,7 @@ async function fetchLatestVersion(): Promise<string | null> {
 
 export interface DigestEnv {
   DB: D1Database;
-  RESEND_API_KEY?: string;
+  SEND_EMAIL?: SendEmail;
   FROM_EMAIL: string;
   REPORTS_DOMAIN: string;
 }
@@ -122,28 +124,20 @@ async function sendDigest(
   body: string,
   env: DigestEnv,
 ): Promise<void> {
-  if (!env.RESEND_API_KEY) {
-    console.log(`[digest] would send to ${email}: ${subject}\n${body}`);
+  if (!env.SEND_EMAIL) {
+    console.log(`[digest] SEND_EMAIL binding not configured — would send to ${email}: ${subject}\n${body}`);
     return;
   }
 
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${env.RESEND_API_KEY}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from: `InboxAngel <${env.FROM_EMAIL}>`,
+  try {
+    await env.SEND_EMAIL.send({
+      from: { name: 'InboxAngel', email: env.FROM_EMAIL },
       to: [email],
       subject,
       text: body,
-    }),
-  });
-
-  if (!res.ok) {
-    const text = await res.text();
-    console.error(`[digest] Resend error ${res.status} for ${email}: ${text}`);
+    });
+  } catch (e) {
+    console.error(`[digest] send failed for ${email}:`, e);
   }
 }
 
