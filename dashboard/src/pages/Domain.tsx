@@ -26,9 +26,9 @@ function getGuidance(domain: Domain, passRate: number | null, hasData: boolean):
 
   if (!hasData) return {
     color: '#6b7280',
-    title: 'No reports yet',
-    body: 'No DMARC reports have been received. Check that your DNS record includes the correct rua= address.',
-    action: { label: 'Your DMARC record should include:', dns: `rua=mailto:${domain.rua_address}` },
+    title: 'Waiting for first reports',
+    body: 'No DMARC reports yet. Mail servers worldwide collect them throughout the day and send a batch once every 24 hours — so your first report usually arrives within a day of adding your DNS record. Nothing to do but wait.',
+    action: { label: 'Double-check your DNS record includes this rua= address:', dns: `rua=mailto:${domain.rua_address}` },
   };
 
   if (policy === 'none') return {
