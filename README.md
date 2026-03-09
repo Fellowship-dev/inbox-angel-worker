@@ -11,45 +11,64 @@ Run it yourself or use our hosted service. Either way, your data lives in a data
 
 ## Self-hosting
 
+### Before you start — create your Cloudflare API token
+
+The Worker needs a token at runtime to manage Email Routing rules and DNS records. This is **separate** from the token Cloudflare auto-creates when you click the deploy button (that one is only for deploying the Worker).
+
+1. Go to [dash.cloudflare.com](https://dash.cloudflare.com) → **My Profile** → **API Tokens** → **Create Token** → **Create Custom Token**
+2. Give it a name (e.g. `inbox-angel-runtime`)
+3. Set these permissions:
+
+| Scope | Resource | Permission |
+|---|---|---|
+| Account | Account Settings | Read |
+| Account | Email Sending | Edit |
+| Zone | Email Routing Rules | Edit |
+| Zone | DNS | Edit |
+| Zone | Workers Routes | Edit |
+
+4. Under **Zone Resources**, select the zone where your `REPORTS_DOMAIN` subdomain will live (e.g. `yourdomain.com`)
+5. Click **Continue to summary** → **Create Token** — copy it, you'll paste it as `CLOUDFLARE_API_TOKEN` below
+
+You'll also need your **Zone ID**: go to [dash.cloudflare.com](https://dash.cloudflare.com) → click your domain → scroll down the right sidebar. Copy the Zone ID.
+
+---
+
 ### Step 1 — Deploy
 
-**Option A — one click:**
+**Option A — one click (recommended):**
 
 [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Fellowship-dev/inbox-angel-worker)
 
-The button provisions the D1 database, runs migrations, prompts for all required secrets (see `.dev.vars.example`), and deploys the Worker in one flow.
+The button forks the repo, creates a D1 database, and prompts for all secrets before deploying. Fill in the secrets form with the values from the section above. The Worker auto-migrates the database schema on first request — no extra step needed.
 
 **Option B — CLI:**
 
-First edit `wrangler.jsonc` — replace these three values with your own:
+```bash
+npm install && npm install --prefix dashboard
 
-```jsonc
-"account_id": "<your CF account ID>",
-"CLOUDFLARE_ZONE_ID": "<your zone ID>",
-"WORKER_NAME": "<your worker name>",    // must match the "name" field at the top
-"routes": [{ "pattern": "<your-worker>.<your-domain>/*", "zone_name": "<your-domain>" }]
+# Edit wrangler.jsonc — update account_id, name, and routes for your domain
+# Then deploy:
+npm run deploy
 ```
 
-Then set secrets and deploy:
+Set secrets:
 
 ```bash
-wrangler secret put API_KEY              # your chosen dashboard password
-wrangler secret put CLOUDFLARE_API_TOKEN # Cloudflare token: DNS:Edit + Email Routing Rules:Edit
-wrangler secret put REPORTS_DOMAIN       # e.g. reports.yourdomain.com
+wrangler secret put CLOUDFLARE_API_TOKEN # the runtime token you created above
+wrangler secret put CLOUDFLARE_ZONE_ID   # your zone ID (right sidebar on dash.cloudflare.com → your domain)
+wrangler secret put REPORTS_DOMAIN       # subdomain for reports, e.g. reports.yourdomain.com
 wrangler secret put FROM_EMAIL           # e.g. noreply@reports.yourdomain.com
-wrangler secret put CUSTOMER_DOMAIN      # your domain (e.g. yourdomain.com)
+wrangler secret put CUSTOMER_DOMAIN      # your domain, e.g. yourdomain.com
 wrangler secret put CUSTOMER_EMAIL       # your email address
-wrangler secret put CUSTOMER_NAME        # display name
-
-npm install && npm install --prefix dashboard
-npm run deploy
+wrangler secret put CUSTOMER_NAME        # your org display name
 ```
 
 ---
 
-### Step 2 — Add your first domain
+### Step 2 — Create your account
 
-Open your worker URL, enter the `API_KEY` you set above, and add your domain.
+Open your worker URL. On first visit you'll see a setup form — enter your name, email, and a password. That's your admin account. No `API_KEY` needed.
 
 On first domain add, the Worker automatically:
 - Enables Email Routing on your Cloudflare zone
@@ -113,7 +132,7 @@ Receiving mail servers → send XML aggregate reports → Cloudflare Email Worke
 | Outbound email | Cloudflare Email Workers | Sends digests and alerts |
 | Storage | Cloudflare D1 | SQLite at the edge |
 | DNS provisioning | Cloudflare DNS API | Provisions per-domain authorization records |
-| Auth | API key (self-hosted) / Auth0 (SaaS) | Pluggable via env vars — leave `AUTH0_DOMAIN` empty for API key mode |
+| Auth | Email + password (self-hosted) / Auth0 (SaaS) | Set up on first visit; Auth0 pluggable via `AUTH0_DOMAIN` env var |
 | Frontend | Embedded SPA | Built from `dashboard/`, served as static assets |
 
 ---
