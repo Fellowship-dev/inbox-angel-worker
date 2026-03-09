@@ -398,7 +398,7 @@ export function insertUser(db: D1Database, u: Pick<User, 'id' | 'email' | 'name'
     .bind(u.id, u.email, u.name, u.password_hash, u.role).run();
 }
 
-export function setUserSession(db: D1Database, userId: string, token: string) {
+export function setUserSession(db: D1Database, userId: string, token: string | null) {
   return db.prepare(`UPDATE users SET session_token = ?, last_login_at = unixepoch() WHERE id = ?`)
     .bind(token, userId).run();
 }

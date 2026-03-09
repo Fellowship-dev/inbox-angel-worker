@@ -140,3 +140,8 @@ export async function removeTeamMember(id: string): Promise<void> {
   const res = await apiFetch(`/api/team/${id}`, { method: 'DELETE' });
   if (!res.ok) await throwApiError(res);
 }
+
+export async function logout(): Promise<void> {
+  await apiFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+  localStorage.removeItem('ia_api_key');
+}

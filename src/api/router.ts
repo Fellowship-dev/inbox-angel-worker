@@ -88,7 +88,7 @@ async function getDomains(env: Env, customerId: string): Promise<Response> {
   return json({ domains: results });
 }
 
-async function addDomain(request: Request, env: Env, customerId: string): Promise<Response> {
+async function addDomain(request: Request, env: Env, customerId: string, userEmail?: string): Promise<Response> {
   const body = await parseBody<{ domain?: string }>(request);
   if (!body.domain || typeof body.domain !== 'string') {
     return err('domain is required', 400);
@@ -151,9 +151,25 @@ async function addDomain(request: Request, env: Env, customerId: string): Promis
 
   track(env, 'domain.add'); // fire-and-forget, non-blocking
 
+  // Auto-subscribe the adding user to monitoring alerts
+  const email = userEmail ?? env.CUSTOMER_EMAIL;
+  if (email) {
+    await insertMonitorSubscription(env.DB, {
+      email: email.toLowerCase().trim(),
+      domain,
+      session_token: null,
+      spf_record: null,
+      dmarc_policy: null,
+      dmarc_pct: null,
+      dmarc_record: null,
+    }).catch(e => console.warn('[domain.add] monitor sub insert failed (non-fatal):', e));
+  }
+
+  // Return the full domain row so the frontend has the ID
+  const domainRow = await getDomainById(env.DB, domainId);
+
   const response: Record<string, unknown> = {
-    domain,
-    rua_address: ruaAddress,
+    domain: domainRow,
     rua_hint: `Add rua=mailto:${ruaAddress} to your DMARC record`,
     auth_record: provision.recordName,
   };
@@ -481,6 +497,14 @@ export async function handleApi(
     return json({ token });
   }
 
+  // POST /api/auth/logout — clear session token
+  if (path === '/api/auth/logout' && method === 'POST') {
+    const key = request.headers.get('x-api-key') ?? '';
+    const user = await getUserBySession(env.DB!, key);
+    if (user) await setUserSession(env.DB!, user.id, null);
+    return json({ ok: true });
+  }
+
   // POST /api/auth/forgot — generate reset token + send email
   if (path === '/api/auth/forgot' && method === 'POST') {
     const body = await parseBody<{ email?: string }>(request);
@@ -595,8 +619,9 @@ export async function handleApi(
   // Resolve session: env API_KEY override → users table session → legacy auto-key
   const requestKey = request.headers.get('x-api-key') ?? '';
   let effectiveApiKey: string | undefined = env.API_KEY;
+  let userBySession: Awaited<ReturnType<typeof getUserBySession>> = null;
   if (!effectiveApiKey) {
-    const userBySession = await getUserBySession(env.DB!, requestKey);
+    userBySession = await getUserBySession(env.DB!, requestKey);
     if (userBySession) {
       effectiveApiKey = requestKey;
     } else {
@@ -628,7 +653,8 @@ export async function handleApi(
     }
     // POST /api/domains
     if (path === '/api/domains' && method === 'POST') {
-      return await addDomain(request, env, customerId);
+      const userEmail = userBySession?.email ?? env.CUSTOMER_EMAIL;
+      return await addDomain(request, env, customerId, userEmail);
     }
     // GET /api/domains/:id/stats
     const domainStatsMatch = path.match(/^\/api\/domains\/([^/]+)\/stats$/);

@@ -11,7 +11,7 @@ import { Team } from './pages/Team';
 import { AcceptInvite } from './pages/AcceptInvite';
 import { ResetPassword } from './pages/ResetPassword';
 import { AuthGate } from './AuthGate';
-import { getVersion, type VersionInfo } from './api';
+import { getVersion, logout, type VersionInfo } from './api';
 
 const DISMISS_KEY = 'ia_update_dismissed';
 
@@ -98,6 +98,12 @@ export function App() {
           <a href="#/team" style={{ ...styles.navLink, ...(navActive(route, 'team') ? styles.navLinkActive : {}) }}>
             Team
           </a>
+          <button
+            onClick={async () => { await logout(); setHasKey(false); }}
+            style={styles.logoutBtn}
+          >
+            {mobile ? '↩' : 'Sign out'}
+          </button>
         </nav>
       </header>
       <main style={styles.main}>
@@ -170,6 +176,15 @@ const styles = {
   navLinkActive: {
     color: '#111827',
     fontWeight: 600,
+  } as const,
+  logoutBtn: {
+    background: 'none',
+    border: 'none',
+    padding: 0,
+    fontSize: '0.875rem',
+    color: '#9ca3af',
+    cursor: 'pointer',
+    fontFamily: 'inherit',
   } as const,
   main: {
     paddingBottom: '3rem',
