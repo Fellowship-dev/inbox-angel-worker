@@ -118,5 +118,7 @@
 		//   CUSTOMER_DOMAIN      — your domain (auto-provisions your account on first request)
 		//   CUSTOMER_EMAIL       — your email address
 		//   CUSTOMER_NAME        — your org display name
+		//   API_KEY              — optional, for programmatic/integration access (X-Api-Key header)
+		//                          dashboard uses email+password — this is for scripts/CI only
 	}
 }

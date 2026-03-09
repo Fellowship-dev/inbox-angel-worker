@@ -68,7 +68,7 @@ wrangler secret put CUSTOMER_NAME        # your org display name
 
 ### Step 2 — Create your account
 
-Open your worker URL. On first visit you'll see a setup form — enter your name, email, and a password. That's your admin account. No `API_KEY` needed.
+Open your worker URL. On first visit you'll see a setup form — enter your name, email, and a password. That's your admin account.
 
 On first domain add, the Worker automatically:
 - Enables Email Routing on your Cloudflare zone
@@ -120,6 +120,27 @@ Receiving mail servers → send XML aggregate reports → Cloudflare Email Worke
         ├── Extracts: sending IPs, pass/fail rates, policy disposition
         └── Stores in D1 → dashboard shows trends
 ```
+
+---
+
+## API access
+
+The dashboard uses **email + password** auth — no API key needed for the UI.
+
+For programmatic access (scripts, CI pipelines, webhooks, integrations), authenticate with an API key using the `X-Api-Key` header:
+
+```bash
+curl https://your-worker.yourdomain.com/api/domains \
+  -H "X-Api-Key: <your-api-key>"
+```
+
+Generate an API key from **Dashboard → Team → API Keys** (coming soon), or set one directly as a Worker secret:
+
+```bash
+wrangler secret put API_KEY
+```
+
+Keep API keys out of your frontend. They're for server-to-server calls only.
 
 ---
 
