@@ -18,3 +18,9 @@ export interface DomainStats {
   days: number;
   stats: DailyStat[];
 }
+
+export interface FailingSource {
+  source_ip: string;
+  total: number;
+  header_from: string | null;
+}

@@ -17,3 +17,9 @@ export async function getDomainStats(id: number, days = 7): Promise<import('./ty
   if (!res.ok) throw new Error(`${res.status}`);
   return res.json();
 }
+
+export async function getDomainSources(id: number, days = 7): Promise<{ sources: import('./types').FailingSource[] }> {
+  const res = await apiFetch(`/api/domains/${id}/sources?days=${days}`);
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}

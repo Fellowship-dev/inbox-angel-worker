@@ -30,6 +30,7 @@ import {
   insertMonitorSubscription,
   upsertCustomer,
   getDomainStats,
+  getTopFailingSources,
 } from '../db/queries';
 import type { DnsProvisionResult } from '../dns/provision';
 import { provisionDomain, deprovisionDomain, DnsProvisionError } from '../dns/provision';
@@ -244,6 +245,21 @@ async function getDomainStatsSummary(env: Env, customerId: string, domainId: str
   return json({ domain: domain.domain, days, stats: results });
 }
 
+async function getDomainSources(env: Env, customerId: string, domainId: string, url: URL): Promise<Response> {
+  const id = parseInt(domainId, 10);
+  if (isNaN(id)) return err('invalid domain id', 400);
+
+  const domain = await getDomainById(env.DB, id);
+  if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+
+  const rawDays = parseInt(url.searchParams.get('days') ?? '7', 10);
+  const days = Math.min(isNaN(rawDays) ? 7 : rawDays, 90);
+  const since = Math.floor(Date.now() / 1000) - days * 86400;
+
+  const { results } = await getTopFailingSources(env.DB, id, since);
+  return json({ sources: results });
+}
+
 // ── Main router ───────────────────────────────────────────────
 
 export async function handleApi(
@@ -328,6 +344,11 @@ export async function handleApi(
     const domainStatsMatch = path.match(/^\/api\/domains\/([^/]+)\/stats$/);
     if (domainStatsMatch && method === 'GET') {
       return await getDomainStatsSummary(env, customerId, domainStatsMatch[1], url);
+    }
+    // GET /api/domains/:id/sources
+    const domainSourcesMatch = path.match(/^\/api\/domains\/([^/]+)\/sources$/);
+    if (domainSourcesMatch && method === 'GET') {
+      return await getDomainSources(env, customerId, domainSourcesMatch[1], url);
     }
     // DELETE /api/domains/:id
     const domainDeleteMatch = path.match(/^\/api\/domains\/([^/]+)$/);

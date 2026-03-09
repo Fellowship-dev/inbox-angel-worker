@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
-import { getDomains, getDomainStats } from '../api';
-import type { Domain, DomainStats } from '../types';
+import { getDomains, getDomainStats, getDomainSources } from '../api';
+import type { Domain, DomainStats, FailingSource } from '../types';
 
 interface Props {
   id: number;
@@ -83,6 +83,7 @@ function getGuidance(domain: Domain, passRate: number | null, hasData: boolean):
 export function DomainDetail({ id, onUnauthorized }: Props) {
   const [domain, setDomain] = useState<Domain | null>(null);
   const [stats, setStats] = useState<DomainStats | null>(null);
+  const [sources, setSources] = useState<FailingSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -91,10 +92,15 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
     let cancelled = false;
     async function load() {
       try {
-        const [{ domains }, s] = await Promise.all([getDomains(), getDomainStats(id, 7)]);
+        const [{ domains }, s, src] = await Promise.all([
+          getDomains(),
+          getDomainStats(id, 7),
+          getDomainSources(id, 7),
+        ]);
         if (cancelled) return;
         setDomain(domains.find((d) => d.id === id) ?? null);
         setStats(s);
+        setSources(src.sources);
       } catch (e: any) {
         if (cancelled) return;
         if (e.message === '401') { onUnauthorized(); return; }
@@ -163,7 +169,7 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
       {/* Daily bars */}
       <h3 style={s.sectionTitle}>Last 7 days</h3>
       {stats.stats.length === 0 && <p style={s.muted}>No data yet.</p>}
-      <div style={s.bars}>
+      <div style={{ ...s.bars, marginBottom: '2rem' }}>
         {stats.stats.map((row) => {
           const passW = (row.passed / maxTotal) * 100;
           const failW = (row.failed / maxTotal) * 100;
@@ -179,6 +185,31 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
           );
         })}
       </div>
+
+      {/* Failing sources */}
+      {sources.length > 0 && (
+        <div>
+          <h3 style={s.sectionTitle}>Top failing sources</h3>
+          <table style={s.table}>
+            <thead>
+              <tr>
+                {['IP', 'Sending as', 'Failed messages'].map((h) => (
+                  <th key={h} style={s.th}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {sources.map((src) => (
+                <tr key={src.source_ip}>
+                  <td style={s.td}><code style={s.code}>{src.source_ip}</code></td>
+                  <td style={s.td}>{src.header_from ?? <span style={s.muted}>—</span>}</td>
+                  <td style={{ ...s.td, textAlign: 'right' }}>{src.total.toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -246,4 +277,8 @@ const s = {
   barFail: { height: '100%', background: '#dc2626', transition: 'width 0.3s' } as const,
   barCount: { width: '4rem', fontSize: '0.8rem', color: '#9ca3af', textAlign: 'right' as const, flexShrink: 0 },
   muted: { color: '#9ca3af' } as const,
+  table: { width: '100%', borderCollapse: 'collapse' as const, fontSize: '0.875rem' },
+  th: { textAlign: 'left' as const, padding: '0.5rem 0.75rem', borderBottom: '1px solid #e5e7eb', fontSize: '0.75rem', color: '#6b7280', fontWeight: 600, textTransform: 'uppercase' as const, letterSpacing: '0.05em' },
+  td: { padding: '0.6rem 0.75rem', borderBottom: '1px solid #f3f4f6', color: '#374151' } as const,
+  code: { fontFamily: 'monospace', fontSize: '0.8rem', color: '#111827' } as const,
 };
