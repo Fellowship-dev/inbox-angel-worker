@@ -3,8 +3,10 @@
 	"version": "0.1.0",
 	"private": true,
 	"scripts": {
-		"deploy": "wrangler deploy",
+		"deploy": "npm run build:dashboard && wrangler deploy",
 		"dev": "wrangler dev",
+		"dev:dashboard": "npm --prefix dashboard run dev",
+		"build:dashboard": "npm --prefix dashboard run build",
 		"start": "wrangler dev",
 		"test": "vitest --config vitest.node.config.mts",
 		"test:workers": "vitest --config vitest.config.mts",
