@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'preact/hooks';
-import { getDomains, getDomainStats, getDomainSources, checkDomainDns, getSpfFlattenStatus, enableSpfFlatten, disableSpfFlatten, getMtaStsStatus, enableMtaSts, updateMtaStsMode, refreshMtaStsMx, disableMtaSts } from '../api';
+import { getDomains, getDomainStats, getDomainSources, checkDomainDns, updateDmarcPolicy, getSpfFlattenStatus, enableSpfFlatten, disableSpfFlatten, getMtaStsStatus, enableMtaSts, updateMtaStsMode, refreshMtaStsMx, disableMtaSts } from '../api';
 import type { Domain, DomainStats, FailingSource, SpfFlatStatus, MtaStsStatus } from '../types';
 import { useIsMobile } from '../hooks';
 
@@ -18,7 +18,7 @@ interface Guidance {
   color: string;
   title: string;
   body: string;
-  action?: { label: string; dns: string };
+  action?: { label: string; dns: string; targetPolicy: string };
 }
 
 function getGuidance(domain: Domain, passRate: number | null, hasData: boolean): Guidance {
@@ -28,14 +28,14 @@ function getGuidance(domain: Domain, passRate: number | null, hasData: boolean):
     color: '#6b7280',
     title: 'Waiting for first reports',
     body: 'No DMARC reports yet. Mail servers worldwide collect them throughout the day and send a batch once every 24 hours — so your first report usually arrives within a day of adding your DNS record. Nothing to do but wait.',
-    action: { label: 'Double-check your DNS record includes this rua= address:', dns: `rua=mailto:${domain.rua_address}` },
+    action: { label: 'Double-check your DNS record includes this rua= address:', dns: `rua=mailto:${domain.rua_address}`, targetPolicy: '' },
   };
 
   if (policy === 'none') return {
     color: '#d97706',
     title: 'Monitoring only — not enforcing',
     body: `You're observing mail flows but DMARC is not protecting your domain yet. Once your pass rate stays above 95% for a few days, switch to quarantine.`,
-    action: { label: 'Next step — update your DMARC record:', dns: `v=DMARC1; p=quarantine; rua=mailto:${domain.rua_address}` },
+    action: { label: 'Next step — update your DMARC record:', dns: `v=DMARC1; p=quarantine; rua=mailto:${domain.rua_address}`, targetPolicy: 'quarantine' },
   };
 
   if (policy === 'quarantine') {
@@ -43,7 +43,7 @@ function getGuidance(domain: Domain, passRate: number | null, hasData: boolean):
       color: '#2563eb',
       title: 'Ready to enforce',
       body: `Pass rate is ${passRate}% — your legitimate mail is well-aligned. You can safely move to reject to stop spoofed mail from reaching inboxes.`,
-      action: { label: 'Next step — update your DMARC record:', dns: `v=DMARC1; p=reject; rua=mailto:${domain.rua_address}` },
+      action: { label: 'Next step — update your DMARC record:', dns: `v=DMARC1; p=reject; rua=mailto:${domain.rua_address}`, targetPolicy: 'reject' },
     };
     return {
       color: '#d97706',
@@ -83,6 +83,10 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [dnsOk, setDnsOk] = useState<boolean | null>(null);
+  const [currentRecord, setCurrentRecord] = useState<string | null>(null);
+  const [cfManaged, setCfManaged] = useState(false);
+  const [dmarcBusy, setDmarcBusy] = useState(false);
+  const [dmarcError, setDmarcError] = useState<string | null>(null);
   const [spfFlat, setSpfFlat] = useState<SpfFlatStatus | null>(null);
   const [spfFlatBusy, setSpfFlatBusy] = useState(false);
   const [spfFlatError, setSpfFlatError] = useState<string | null>(null);
@@ -130,13 +134,17 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
 
   const total = stats ? stats.stats.reduce((n, r) => n + r.total, 0) : 0;
 
-  // One-time DNS check when there's no data yet — helps user diagnose whether record is missing
+  // DNS check on load — detects current record for comparison + CF-managed flag
   useEffect(() => {
-    if (!stats || total > 0) return;
+    if (!stats) return;
     checkDomainDns(id)
-      .then(({ found, has_rua }) => setDnsOk(found && has_rua))
+      .then(({ found, has_rua, current_record, cf_managed }) => {
+        setDnsOk(found && has_rua);
+        setCurrentRecord(current_record);
+        setCfManaged(cf_managed);
+      })
       .catch(() => {});
-  }, [id, stats, total]);
+  }, [id, stats]);
 
   if (loading) return <p style={s.muted}>Loading…</p>;
   if (error) return <p style={{ color: '#dc2626' }}>Error: {error}</p>;
@@ -177,15 +185,45 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
       <div style={{ ...s.guidanceCard, borderLeftColor: guidance.color }}>
         <div style={{ ...s.guidanceTitle, color: guidance.color }}>{guidance.title}</div>
         <p style={s.guidanceBody}>{guidance.body}</p>
-        {guidance.action && (
+        {guidance.action && guidance.action.targetPolicy && (
           <div style={s.guidanceAction}>
             <span style={s.guidanceActionLabel}>{guidance.action.label}</span>
+            {currentRecord && currentRecord !== guidance.action.dns && (
+              <div style={{ marginBottom: '0.5rem', fontSize: '0.8rem' }}>
+                <div style={{ color: '#6b7280', marginBottom: '0.2rem' }}>Current:</div>
+                <code style={{ ...s.dnsCode, opacity: 0.6, textDecoration: 'line-through' }}>{currentRecord}</code>
+              </div>
+            )}
             <div style={{ ...s.dnsRow, flexWrap: 'wrap' }}>
               <code style={s.dnsCode}>{guidance.action.dns}</code>
               <button style={s.copyBtn} onClick={() => copy(guidance.action!.dns)}>
                 {copied ? 'Copied!' : 'Copy'}
               </button>
+              {cfManaged && guidance.action.targetPolicy && (
+                <button
+                  style={{ ...s.copyBtn, background: guidance.color, color: '#fff', borderColor: guidance.color, opacity: dmarcBusy ? 0.6 : 1 }}
+                  disabled={dmarcBusy}
+                  onClick={async () => {
+                    setDmarcBusy(true);
+                    setDmarcError(null);
+                    try {
+                      await updateDmarcPolicy(id, guidance.action!.targetPolicy);
+                      const { domains } = await getDomains();
+                      const updated = domains.find(d => d.id === id);
+                      if (updated) setDomain(updated);
+                      setCurrentRecord(guidance.action!.dns);
+                    } catch (e: any) {
+                      setDmarcError(e.message ?? 'Failed to update DMARC policy');
+                    } finally {
+                      setDmarcBusy(false);
+                    }
+                  }}
+                >
+                  {dmarcBusy ? 'Applying…' : 'Apply via Cloudflare'}
+                </button>
+              )}
             </div>
+            {dmarcError && <p style={{ color: '#dc2626', fontSize: '0.8rem', marginTop: '0.25rem' }}>{dmarcError}</p>}
           </div>
         )}
         {total === 0 && dnsOk !== null && (

@@ -54,6 +54,7 @@ import {
   getDomainById,
   insertDomain,
   updateDomainDnsRecord,
+  updateDomainDmarcPolicy,
   updateDomainSpfLookupCount,
   getRecentReports,
   getCheckResultByToken,
@@ -101,6 +102,7 @@ import {
   discoverMxHosts,
   generatePolicyId,
   buildPolicyFile,
+  patchCfDnsRecord,
 } from '../email/mta-sts';
 import {
   getSpfFlattenConfig,
@@ -987,12 +989,58 @@ async function _handleApi(
         const records = doh.Answer ?? [];
         const found = records.length > 0;
         const has_rua = records.some(r => r.data.includes(domain.rua_address));
+        // Strip surrounding quotes that DoH JSON wraps TXT content in
+        const current_record = records[0]?.data?.replace(/^"|"$/g, '') ?? null;
+        const cf_managed = !!domain.dns_record_id;
         if (found) track(env, { event: 'domain.dns_verified' }); // fire-and-forget
-        return json({ found, has_rua });
+        return json({ found, has_rua, current_record, cf_managed });
       } catch {
-        return json({ found: false, has_rua: false, error: 'dns lookup failed' });
+        return json({ found: false, has_rua: false, current_record: null, cf_managed: false, error: 'dns lookup failed' });
       }
     }
+    // PATCH /api/domains/:id/dmarc — update DMARC policy via CF DNS (CF-managed domains only)
+    const dmarcPatchMatch = path.match(/^\/api\/domains\/([^/]+)\/dmarc$/);
+    if (dmarcPatchMatch && method === 'PATCH') {
+      const id = parseInt(dmarcPatchMatch[1], 10);
+      if (isNaN(id)) return err('invalid domain id', 400);
+      const domain = await getDomainById(env.DB, id);
+      if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+      if (!domain.dns_record_id) return err('domain is not CF-managed — update DNS manually', 400);
+      if (!env.CLOUDFLARE_API_TOKEN) return err('Cloudflare credentials not configured', 400);
+
+      const body = await parseBody<{ policy?: string }>(request);
+      const policy = body.policy;
+      if (!policy || !['none', 'quarantine', 'reject'].includes(policy)) {
+        return err('policy must be none, quarantine, or reject', 400);
+      }
+
+      // Build updated TXT record, preserving rua= and any pct= from existing record
+      const rd = reportsDomain(env);
+      const ruaPart = rd ? `; rua=mailto:${domain.rua_address}` : '';
+      const newRecord = `v=DMARC1; p=${policy}${ruaPart}`;
+
+      try {
+        await patchCfDnsRecord({ CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN }, domain.dns_record_id, newRecord);
+      } catch (e: any) {
+        return err(e.message ?? 'CF DNS patch failed', 500);
+      }
+
+      const prevPolicy = domain.dmarc_policy ?? 'none';
+      await updateDomainDmarcPolicy(env.DB, id, policy);
+
+      logAudit(env.DB, {
+        customer_id: customerId,
+        actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
+        action: 'domain.dmarc_mode_change',
+        resource_type: 'domain', resource_id: String(id), resource_name: domain.domain,
+        before_value: { policy: prevPolicy },
+        after_value: { policy, record: newRecord },
+      }, ctx);
+      track(env, { event: 'domain.dmarc_mode_change', from: prevPolicy, to: policy });
+
+      return json({ ok: true, policy, record: newRecord });
+    }
+
     // DELETE /api/domains/:id
     const domainDeleteMatch = path.match(/^\/api\/domains\/([^/]+)$/);
     if (domainDeleteMatch && method === 'DELETE') {

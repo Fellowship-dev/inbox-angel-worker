@@ -48,6 +48,11 @@ export function updateDomainSpfLookupCount(db: D1Database, domainId: number, cou
     .bind(count, domainId).run();
 }
 
+export function updateDomainDmarcPolicy(db: D1Database, domainId: number, policy: string) {
+  return db.prepare(`UPDATE domains SET dmarc_policy = ?, updated_at = unixepoch() WHERE id = ?`)
+    .bind(policy, domainId).run();
+}
+
 export function updateDomainDnsRecord(db: D1Database, domainId: number, recordId: string) {
   return db.prepare(`
     UPDATE domains SET dns_record_id = ?, auth_record_provisioned = 1, updated_at = unixepoch()

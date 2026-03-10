@@ -91,8 +91,18 @@ export async function getVersion(): Promise<VersionInfo> {
   return res.json();
 }
 
-export async function checkDomainDns(id: number): Promise<{ found: boolean; has_rua: boolean }> {
+export async function checkDomainDns(id: number): Promise<{ found: boolean; has_rua: boolean; current_record: string | null; cf_managed: boolean }> {
   const res = await apiFetch(`/api/domains/${id}/dns-check`);
+  if (!res.ok) await throwApiError(res);
+  return res.json();
+}
+
+export async function updateDmarcPolicy(id: number, policy: string): Promise<{ ok: boolean; policy: string; record: string }> {
+  const res = await apiFetch(`/api/domains/${id}/dmarc`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ policy }),
+  });
   if (!res.ok) await throwApiError(res);
   return res.json();
 }

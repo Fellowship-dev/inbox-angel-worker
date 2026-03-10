@@ -137,6 +137,14 @@ async function createDnsRecord(
   return data.result.id;
 }
 
+export async function patchCfDnsRecord(
+  env: { CLOUDFLARE_API_TOKEN: string },
+  recordId: string,
+  content: string
+): Promise<void> {
+  await patchDnsRecord(env as MtaStsDeprovisionEnv, recordId, content);
+}
+
 async function patchDnsRecord(
   env: MtaStsDeprovisionEnv,
   recordId: string,
