@@ -1,6 +1,6 @@
 import { handleEmail } from './email/handler';
 import { handleApi } from './api/router';
-import { getActiveSubscriptions, updateSubscriptionBaseline, getAllEnabledSpfFlattenConfigs, updateSpfFlattenResult, updateSpfFlattenError, getDomainById, getAllDomains, updateDomainSpfLookupCount } from './db/queries';
+import { getActiveSubscriptions, updateSubscriptionBaseline, getAllEnabledSpfFlattenConfigs, updateSpfFlattenResult, updateSpfFlattenError, getDomainById, getAllDomains, updateDomainSpfLookupCount, getAllEnabledMtaStsConfigs, getMtaStsConfigByDomain, updateMtaStsMxHosts, updateMtaStsError } from './db/queries';
 import { checkSubscription } from './monitor/check';
 import { sendChangeNotification } from './monitor/notify';
 import { sendWeeklyDigests } from './digest/weekly';
@@ -8,6 +8,7 @@ import { ensureMigrated } from './db/migrate';
 import { reportsDomain, fromEmail } from './env-utils';
 import { flattenSpf } from './email/spf-flattener';
 import { lookupSpf } from './email/dns-check';
+import { discoverMxHosts, generatePolicyId, buildPolicyFile, updateMtaStsTxtRecord } from './email/mta-sts';
 
 export interface Env {
   DB: D1Database | undefined;
@@ -41,7 +42,25 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (!env.DB) return setupPage();
     await ensureMigrated(env.DB);
-    const { pathname } = new URL(request.url);
+    const url = new URL(request.url);
+    const { pathname, hostname } = url;
+
+    // MTA-STS policy file — served on mta-sts.* hostnames per RFC 8461
+    // mta-sts.domain.com CNAME → this Worker; CF Universal SSL covers HTTPS
+    if (hostname.startsWith('mta-sts.') && pathname === '/.well-known/mta-sts.txt') {
+      const domain = hostname.slice('mta-sts.'.length);
+      const config = await getMtaStsConfigByDomain(env.DB, domain);
+      if (!config) return new Response('MTA-STS not configured for this domain', { status: 404 });
+      const mxHosts = config.mx_hosts ? config.mx_hosts.split(',').filter(Boolean) : [];
+      const policy = buildPolicyFile(config.mode, mxHosts, 86400);
+      return new Response(policy, {
+        headers: {
+          'Content-Type': 'text/plain',
+          'Cache-Control': 'max-age=300',
+        },
+      });
+    }
+
     if (pathname === '/health' || pathname.startsWith('/api/')) {
       return handleApi(request, env, ctx);
     }
@@ -105,6 +124,31 @@ export default {
           }
         })
         .catch(e => console.warn(`[monitor] SPF lookup refresh failed for ${d.domain}:`, e));
+    }
+
+    // MTA-STS MX refresh — update policy_id in DNS if MX hosts changed
+    if (env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ZONE_ID) {
+      const { results: mtaConfigs } = await getAllEnabledMtaStsConfigs(env.DB);
+      const patchEnv = { CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN, CLOUDFLARE_ZONE_ID: env.CLOUDFLARE_ZONE_ID };
+      for (const cfg of mtaConfigs) {
+        const domain = await getDomainById(env.DB, cfg.domain_id);
+        if (!domain) continue;
+        try {
+          const liveMx = await discoverMxHosts(domain.domain);
+          const storedMx = cfg.mx_hosts ? cfg.mx_hosts.split(',').filter(Boolean) : [];
+          const changed = liveMx.length !== storedMx.length || liveMx.some((h, i) => h !== storedMx[i]);
+          if (changed && cfg.mta_sts_record_id) {
+            const newPolicyId = generatePolicyId();
+            await updateMtaStsTxtRecord(cfg.mta_sts_record_id, newPolicyId, patchEnv);
+            await updateMtaStsMxHosts(env.DB, cfg.domain_id, liveMx.join(','), newPolicyId);
+            console.log(`[mta-sts] ${domain.domain}: MX changed, policy_id updated`);
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          await updateMtaStsError(env.DB, cfg.domain_id, msg);
+          console.error(`[mta-sts] ${domain.domain}: MX refresh error — ${msg}`);
+        }
+      }
     }
 
     const { results: subscriptions } = await getActiveSubscriptions(env.DB, 200);

@@ -130,6 +130,12 @@ function escapeRe(s: string): string {
  *
  * Returns a Uint8Array suitable for passing to extractReport().
  */
+// Read the full email as a UTF-8 string. Used for TLS-RPT reports (plain JSON body).
+export async function extractTextBody(raw: ReadableStream<Uint8Array>): Promise<string> {
+  const allBytes = await readStream(raw);
+  return new TextDecoder('utf-8', { fatal: false }).decode(allBytes);
+}
+
 export async function extractAttachmentBytes(
   raw: ReadableStream<Uint8Array>,
 ): Promise<Uint8Array> {

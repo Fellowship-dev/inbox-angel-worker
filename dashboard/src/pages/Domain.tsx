@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
-import { getDomains, getDomainStats, getDomainSources, checkDomainDns, getSpfFlattenStatus, enableSpfFlatten, disableSpfFlatten } from '../api';
-import type { Domain, DomainStats, FailingSource, SpfFlatStatus } from '../types';
+import { getDomains, getDomainStats, getDomainSources, checkDomainDns, getSpfFlattenStatus, enableSpfFlatten, disableSpfFlatten, getMtaStsStatus, enableMtaSts, updateMtaStsMode, refreshMtaStsMx, disableMtaSts } from '../api';
+import type { Domain, DomainStats, FailingSource, SpfFlatStatus, MtaStsStatus } from '../types';
 import { useIsMobile } from '../hooks';
 
 interface Props {
@@ -86,6 +86,9 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
   const [spfFlat, setSpfFlat] = useState<SpfFlatStatus | null>(null);
   const [spfFlatBusy, setSpfFlatBusy] = useState(false);
   const [spfFlatError, setSpfFlatError] = useState<string | null>(null);
+  const [mtaSts, setMtaSts] = useState<MtaStsStatus | null>(null);
+  const [mtaStsBusy, setMtaStsBusy] = useState(false);
+  const [mtaStsError, setMtaStsError] = useState<string | null>(null);
   const mobile = useIsMobile();
 
   // Initial load: domain info + failing sources (don't depend on chartDays)
@@ -93,15 +96,17 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
     let cancelled = false;
     async function load() {
       try {
-        const [{ domains }, src, flat] = await Promise.all([
+        const [{ domains }, src, flat, mta] = await Promise.all([
           getDomains(),
           getDomainSources(id, 7),
           getSpfFlattenStatus(id).catch(() => null),
+          getMtaStsStatus(id).catch(() => null),
         ]);
         if (cancelled) return;
         setDomain(domains.find((d) => d.id === id) ?? null);
         setSources(src.sources);
         if (flat) setSpfFlat(flat);
+        if (mta) setMtaSts(mta);
       } catch (e: any) {
         if (cancelled) return;
         if (e.message === '401') { onUnauthorized(); return; }
@@ -255,7 +260,7 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
             setSpfFlatError(null);
             try {
               const { config } = await enableSpfFlatten(id);
-              setSpfFlat({ available: true, config });
+              setSpfFlat({ available: true, config, lookup_count: spfFlat?.lookup_count ?? null });
             } catch (e: any) {
               setSpfFlatError(e.message ?? 'Failed to enable');
             } finally {
@@ -267,11 +272,71 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
             setSpfFlatError(null);
             try {
               await disableSpfFlatten(id);
-              setSpfFlat({ available: spfFlat.available, config: null });
+              setSpfFlat({ available: spfFlat.available, config: null, lookup_count: spfFlat?.lookup_count ?? null });
             } catch (e: any) {
               setSpfFlatError(e.message ?? 'Failed to disable');
             } finally {
               setSpfFlatBusy(false);
+            }
+          }}
+        />
+      )}
+
+      {/* MTA-STS health card — only shown when CF creds present or MTA-STS already active */}
+      {mtaSts && (mtaSts.available || mtaSts.config) && (
+        <MtaStsHealthCard
+          status={mtaSts}
+          busy={mtaStsBusy}
+          error={mtaStsError}
+          onEnable={async () => {
+            setMtaStsBusy(true);
+            setMtaStsError(null);
+            try {
+              await enableMtaSts(id);
+              const updated = await getMtaStsStatus(id);
+              setMtaSts(updated);
+            } catch (e: any) {
+              setMtaStsError(e.message ?? 'Failed to enable');
+            } finally {
+              setMtaStsBusy(false);
+            }
+          }}
+          onSetMode={async (mode) => {
+            setMtaStsBusy(true);
+            setMtaStsError(null);
+            try {
+              await updateMtaStsMode(id, mode);
+              const updated = await getMtaStsStatus(id);
+              setMtaSts(updated);
+            } catch (e: any) {
+              setMtaStsError(e.message ?? 'Failed to update mode');
+            } finally {
+              setMtaStsBusy(false);
+            }
+          }}
+          onRefreshMx={async () => {
+            setMtaStsBusy(true);
+            setMtaStsError(null);
+            try {
+              await refreshMtaStsMx(id);
+              const updated = await getMtaStsStatus(id);
+              setMtaSts(updated);
+            } catch (e: any) {
+              setMtaStsError(e.message ?? 'Failed to refresh MX');
+            } finally {
+              setMtaStsBusy(false);
+            }
+          }}
+          onDisable={async () => {
+            setMtaStsBusy(true);
+            setMtaStsError(null);
+            try {
+              await disableMtaSts(id);
+              setMtaSts({ available: mtaSts.available, config: null, summary: null });
+            } catch (e: any) {
+              setMtaStsError(e.message ?? 'Failed to disable');
+            } finally {
+              setMtaStsBusy(false);
             }
           }}
         />
@@ -444,6 +509,158 @@ function SpfHealthCard({
             >
               {busy ? 'Flattening…' : 'Enable flattening'}
             </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MtaStsHealthCard({
+  status, busy, error, onEnable, onSetMode, onRefreshMx, onDisable,
+}: {
+  status: MtaStsStatus;
+  busy: boolean;
+  error: string | null;
+  onEnable: () => void;
+  onSetMode: (mode: 'testing' | 'enforce') => void;
+  onRefreshMx: () => void;
+  onDisable: () => void;
+}) {
+  const { config, summary } = status;
+  const isActive = !!config?.enabled;
+  const mode = config?.mode ?? 'testing';
+  const mxHosts = config?.mx_hosts ? config.mx_hosts.split(',').filter(Boolean) : [];
+
+  const borderColor = isActive
+    ? mode === 'enforce' ? '#16a34a' : '#2563eb'
+    : '#e5e7eb';
+
+  const modeColor   = mode === 'enforce' ? '#15803d' : '#1d4ed8';
+  const modeBg      = mode === 'enforce' ? '#dcfce7' : '#dbeafe';
+
+  const updatedAt = config?.updated_at
+    ? new Date(config.updated_at * 1000).toLocaleString('en-GB', {
+        day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+      })
+    : null;
+
+  return (
+    <div style={{
+      border: '1px solid #e5e7eb',
+      borderLeft: `4px solid ${borderColor}`,
+      borderRadius: '8px',
+      padding: '1rem 1.25rem',
+      marginBottom: '2rem',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.3rem', flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 700, fontSize: '0.875rem' }}>MTA-STS / TLS-RPT</span>
+            {isActive && (
+              <span style={{
+                padding: '1px 7px', borderRadius: '9999px', fontSize: '0.72rem', fontWeight: 700,
+                color: modeColor, background: modeBg,
+              }}>
+                {mode}
+              </span>
+            )}
+          </div>
+          <p style={{ margin: 0, fontSize: '0.8rem', color: '#6b7280', lineHeight: 1.5 }}>
+            {isActive
+              ? `Protecting inbound TLS via MTA-STS (${mode} mode). ${mxHosts.length} MX host${mxHosts.length !== 1 ? 's' : ''} in policy.${updatedAt ? ` Updated ${updatedAt}.` : ''}`
+              : 'Enable MTA-STS to instruct sending MTAs to enforce TLS when delivering to your domain, and collect TLS-RPT failure reports.'}
+          </p>
+          {isActive && summary && (
+            <p style={{ margin: '0.3rem 0 0', fontSize: '0.78rem', color: '#6b7280' }}>
+              Last 30 days: {summary.total_success.toLocaleString()} successful sessions,{' '}
+              {summary.total_failure > 0
+                ? <span style={{ color: '#dc2626', fontWeight: 600 }}>{summary.total_failure.toLocaleString()} failures</span>
+                : <span style={{ color: '#15803d' }}>0 failures</span>
+              }{' '}({summary.report_count} report{summary.report_count !== 1 ? 's' : ''})
+            </p>
+          )}
+          {isActive && mxHosts.length > 0 && (
+            <details style={{ marginTop: '0.5rem' }}>
+              <summary style={{ fontSize: '0.75rem', color: '#9ca3af', cursor: 'pointer' }}>MX hosts in policy</summary>
+              <ul style={{ margin: '0.3rem 0 0', paddingLeft: '1.25rem', fontSize: '0.72rem', color: '#374151' }}>
+                {mxHosts.map(h => <li key={h}>{h}</li>)}
+              </ul>
+            </details>
+          )}
+          {config?.last_error && (
+            <p style={{ margin: '0.4rem 0 0', fontSize: '0.75rem', color: '#dc2626' }}>
+              Last error: {config.last_error}
+            </p>
+          )}
+          {error && (
+            <p style={{ margin: '0.4rem 0 0', fontSize: '0.75rem', color: '#dc2626' }}>{error}</p>
+          )}
+        </div>
+        <div style={{ flexShrink: 0, display: 'flex', flexDirection: 'column', gap: '0.4rem', alignItems: 'flex-end' }}>
+          {!isActive ? (
+            <button
+              onClick={onEnable}
+              disabled={busy}
+              style={{
+                padding: '0.35rem 0.85rem', fontSize: '0.8rem', cursor: busy ? 'default' : 'pointer',
+                background: '#111827', color: '#fff', border: 'none',
+                borderRadius: '6px', opacity: busy ? 0.6 : 1,
+              }}
+            >
+              {busy ? 'Enabling…' : 'Enable MTA-STS'}
+            </button>
+          ) : (
+            <>
+              {mode === 'testing' && (
+                <button
+                  onClick={() => onSetMode('enforce')}
+                  disabled={busy}
+                  style={{
+                    padding: '0.35rem 0.85rem', fontSize: '0.8rem', cursor: busy ? 'default' : 'pointer',
+                    background: '#15803d', color: '#fff', border: 'none',
+                    borderRadius: '6px', opacity: busy ? 0.6 : 1,
+                  }}
+                >
+                  {busy ? 'Working…' : 'Graduate to enforce'}
+                </button>
+              )}
+              {mode === 'enforce' && (
+                <button
+                  onClick={() => onSetMode('testing')}
+                  disabled={busy}
+                  style={{
+                    padding: '0.35rem 0.85rem', fontSize: '0.8rem', cursor: busy ? 'default' : 'pointer',
+                    background: '#fff', color: '#1d4ed8', border: '1px solid #93c5fd',
+                    borderRadius: '6px', opacity: busy ? 0.6 : 1,
+                  }}
+                >
+                  {busy ? 'Working…' : 'Revert to testing'}
+                </button>
+              )}
+              <button
+                onClick={onRefreshMx}
+                disabled={busy}
+                style={{
+                  padding: '0.35rem 0.85rem', fontSize: '0.8rem', cursor: busy ? 'default' : 'pointer',
+                  background: '#fff', color: '#374151', border: '1px solid #d1d5db',
+                  borderRadius: '6px', opacity: busy ? 0.6 : 1,
+                }}
+              >
+                {busy ? 'Working…' : 'Refresh MX'}
+              </button>
+              <button
+                onClick={onDisable}
+                disabled={busy}
+                style={{
+                  padding: '0.35rem 0.85rem', fontSize: '0.8rem', cursor: busy ? 'default' : 'pointer',
+                  background: '#fff', color: '#6b7280', border: '1px solid #d1d5db',
+                  borderRadius: '6px', opacity: busy ? 0.6 : 1,
+                }}
+              >
+                {busy ? 'Working…' : 'Disable'}
+              </button>
+            </>
           )}
         </div>
       </div>

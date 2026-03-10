@@ -111,6 +111,31 @@ export interface SpfFlatStatus {
   lookup_count: number | null;  // from domains.spf_lookup_count — populated on add + daily cron
 }
 
+export interface MtaStsConfig {
+  domain_id: number;
+  enabled: number;
+  mode: 'testing' | 'enforce';
+  mx_hosts: string;       // comma-separated
+  policy_id: string;
+  mta_sts_record_id: string | null;
+  tls_rpt_record_id: string | null;
+  cname_record_id: string | null;
+  last_error: string | null;
+  updated_at: number;
+}
+
+export interface TlsReportSummary {
+  total_success: number;
+  total_failure: number;
+  report_count: number;
+}
+
+export interface MtaStsStatus {
+  available: boolean;
+  config: MtaStsConfig | null;
+  summary: TlsReportSummary | null;
+}
+
 export interface DayReport {
   date: string;
   domain: string;

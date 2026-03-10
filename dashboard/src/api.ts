@@ -178,6 +178,43 @@ export async function disableSpfFlatten(domainId: number): Promise<void> {
   if (!res.ok) await throwApiError(res);
 }
 
+export async function getMtaStsStatus(domainId: number): Promise<import('./types').MtaStsStatus> {
+  const res = await apiFetch(`/api/domains/${domainId}/mta-sts`);
+  if (!res.ok) await throwApiError(res);
+  return res.json();
+}
+
+export async function enableMtaSts(domainId: number): Promise<{ ok: boolean; mode: string; mx_hosts: string[] }> {
+  const res = await apiFetch(`/api/domains/${domainId}/mta-sts`, { method: 'POST' });
+  if (!res.ok) await throwApiError(res);
+  return res.json();
+}
+
+export async function updateMtaStsMode(domainId: number, mode: 'testing' | 'enforce'): Promise<{ ok: boolean; mode: string; policy_id: string }> {
+  const res = await apiFetch(`/api/domains/${domainId}/mta-sts`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode }),
+  });
+  if (!res.ok) await throwApiError(res);
+  return res.json();
+}
+
+export async function refreshMtaStsMx(domainId: number): Promise<{ ok: boolean; mx_hosts: string[]; policy_id: string }> {
+  const res = await apiFetch(`/api/domains/${domainId}/mta-sts`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ refresh_mx: true }),
+  });
+  if (!res.ok) await throwApiError(res);
+  return res.json();
+}
+
+export async function disableMtaSts(domainId: number): Promise<void> {
+  const res = await apiFetch(`/api/domains/${domainId}/mta-sts`, { method: 'DELETE' });
+  if (!res.ok) await throwApiError(res);
+}
+
 export async function logout(): Promise<void> {
   await apiFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
   localStorage.removeItem('ia_api_key');

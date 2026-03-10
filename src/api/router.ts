@@ -93,11 +93,25 @@ import { reportsDomain, fromEmail } from '../env-utils';
 import { flattenSpf, restoreSpf } from '../email/spf-flattener';
 import { lookupSpf } from '../email/dns-check';
 import {
+  provisionMtaSts,
+  updateMtaStsTxtRecord,
+  deprovisionMtaSts,
+  discoverMxHosts,
+  generatePolicyId,
+  buildPolicyFile,
+} from '../email/mta-sts';
+import {
   getSpfFlattenConfig,
   upsertSpfFlattenConfig,
   updateSpfFlattenResult,
   updateSpfFlattenError,
   deleteSpfFlattenConfig,
+  getMtaStsConfig,
+  insertMtaStsConfig,
+  updateMtaStsMode,
+  updateMtaStsMxHosts,
+  deleteMtaStsConfig,
+  getTlsReportSummary,
 } from '../db/queries';
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -938,6 +952,116 @@ export async function handleApi(
         await deleteSpfFlattenConfig(env.DB, id);
         return new Response(null, { status: 204 });
       }
+    }
+
+    // MTA-STS routes — GET/POST/PATCH/DELETE /api/domains/:id/mta-sts
+    const mtaStsMatch = path.match(/^\/api\/domains\/([^/]+)\/mta-sts$/);
+    if (mtaStsMatch) {
+      const id = parseInt(mtaStsMatch[1], 10);
+      if (isNaN(id)) return err('invalid domain id', 400);
+      const domain = await getDomainById(env.DB, id);
+      if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+
+      if (method === 'GET') {
+        const config = await getMtaStsConfig(env.DB, id);
+        const tlsSince = Math.floor(Date.now() / 1000) - 30 * 86400; // last 30 days
+        const summary = config ? await getTlsReportSummary(env.DB, id, tlsSince) : null;
+        return json({ available: !!(env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ZONE_ID), config, summary });
+      }
+
+      if (method === 'POST') {
+        // Enable MTA-STS
+        if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ZONE_ID || !env.REPORTS_DOMAIN) {
+          return err('Cloudflare credentials not configured', 400);
+        }
+        const existing = await getMtaStsConfig(env.DB, id);
+        if (existing?.enabled) return err('MTA-STS already enabled for this domain', 409);
+
+        try {
+          const result = await provisionMtaSts(domain.domain, {
+            CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN,
+            CLOUDFLARE_ZONE_ID: env.CLOUDFLARE_ZONE_ID,
+            REPORTS_DOMAIN: reportsDomain(env)!,
+            WORKER_NAME: env.WORKER_NAME ?? 'inbox-angel-worker',
+          });
+          await insertMtaStsConfig(env.DB, {
+            domain_id: id,
+            mode: result.mode,
+            mx_hosts: result.mx_hosts.join(','),
+            policy_id: result.policy_id,
+            mta_sts_record_id: result.mta_sts_record_id,
+            tls_rpt_record_id: result.tls_rpt_record_id,
+            cname_record_id: result.cname_record_id,
+          });
+          return json({ ok: true, mode: result.mode, mx_hosts: result.mx_hosts });
+        } catch (e: any) {
+          return err(e.message ?? 'provisioning failed', 500);
+        }
+      }
+
+      if (method === 'PATCH') {
+        // Update mode (testing → enforce) or refresh MX hosts
+        const config = await getMtaStsConfig(env.DB, id);
+        if (!config?.enabled) return err('MTA-STS not enabled for this domain', 404);
+        if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ZONE_ID) return err('Cloudflare credentials not configured', 400);
+
+        const body = await parseBody<{ mode?: string; refresh_mx?: boolean }>(request);
+        const patchEnv = { CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN, CLOUDFLARE_ZONE_ID: env.CLOUDFLARE_ZONE_ID };
+
+        if (body.mode && (body.mode === 'testing' || body.mode === 'enforce')) {
+          const newPolicyId = generatePolicyId();
+          await updateMtaStsTxtRecord(config.mta_sts_record_id!, newPolicyId, patchEnv);
+          await updateMtaStsMode(env.DB, id, body.mode, newPolicyId);
+          return json({ ok: true, mode: body.mode, policy_id: newPolicyId });
+        }
+
+        if (body.refresh_mx) {
+          const mxHosts = await discoverMxHosts(domain.domain);
+          if (mxHosts.length === 0) return err('No MX records found', 400);
+          const newPolicyId = generatePolicyId();
+          await updateMtaStsTxtRecord(config.mta_sts_record_id!, newPolicyId, patchEnv);
+          await updateMtaStsMxHosts(env.DB, id, mxHosts.join(','), newPolicyId);
+          return json({ ok: true, mx_hosts: mxHosts, policy_id: newPolicyId });
+        }
+
+        return err('nothing to update', 400);
+      }
+
+      if (method === 'DELETE') {
+        // Disable + remove DNS records
+        const config = await getMtaStsConfig(env.DB, id);
+        if (!config) return new Response(null, { status: 204 });
+
+        if (env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ZONE_ID) {
+          try {
+            await deprovisionMtaSts(
+              { CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN, CLOUDFLARE_ZONE_ID: env.CLOUDFLARE_ZONE_ID },
+              {
+                mta_sts_record_id: config.mta_sts_record_id ?? null,
+                tls_rpt_record_id: config.tls_rpt_record_id ?? null,
+                cname_record_id: config.cname_record_id ?? null,
+              }
+            );
+          } catch (e) {
+            console.warn(`[mta-sts] deprovision DNS failed for ${domain.domain}:`, e);
+          }
+        }
+
+        await deleteMtaStsConfig(env.DB, id);
+        return new Response(null, { status: 204 });
+      }
+    }
+
+    // MTA-STS policy file endpoint — GET /api/domains/:id/mta-sts/policy
+    const mtaStsPolicyMatch = path.match(/^\/api\/domains\/([^/]+)\/mta-sts\/policy$/);
+    if (mtaStsPolicyMatch && method === 'GET') {
+      const id = parseInt(mtaStsPolicyMatch[1], 10);
+      if (isNaN(id)) return err('invalid domain id', 400);
+      const config = await getMtaStsConfig(env.DB, id);
+      if (!config?.enabled) return err('MTA-STS not enabled', 404);
+      const mxHosts = config.mx_hosts ? config.mx_hosts.split(',').filter(Boolean) : [];
+      const policy = buildPolicyFile(config.mode, mxHosts, 86400);
+      return new Response(policy, { headers: { 'Content-Type': 'text/plain' } });
     }
 
     return err('not found', 404);

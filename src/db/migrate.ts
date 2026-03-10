@@ -236,6 +236,47 @@ const MIGRATIONS: { version: number; sql: string }[] = [
 		version: 13,
 		sql: `ALTER TABLE domains ADD COLUMN spf_lookup_count INTEGER;`,
 	},
+	{
+		// MTA-STS per-domain config — mode, MX hosts, CF DNS record IDs
+		version: 14,
+		sql: `
+      CREATE TABLE IF NOT EXISTS mta_sts_config (
+        domain_id          INTEGER PRIMARY KEY REFERENCES domains(id) ON DELETE CASCADE,
+        enabled            INTEGER NOT NULL DEFAULT 1,
+        mode               TEXT NOT NULL DEFAULT 'testing',
+        mx_hosts           TEXT NOT NULL DEFAULT '[]',
+        max_age            INTEGER NOT NULL DEFAULT 86400,
+        policy_id          TEXT NOT NULL,
+        mta_sts_record_id  TEXT,
+        tls_rpt_record_id  TEXT,
+        cname_record_id    TEXT,
+        last_error         TEXT,
+        created_at         INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at         INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+    `,
+	},
+	{
+		// TLS-RPT aggregate reports — inbound JSON reports from sending MTAs
+		version: 15,
+		sql: `
+      CREATE TABLE IF NOT EXISTS tls_reports (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        domain_id       INTEGER NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
+        customer_id     TEXT NOT NULL,
+        org_name        TEXT NOT NULL,
+        date_begin      INTEGER NOT NULL,
+        date_end        INTEGER NOT NULL,
+        total_success   INTEGER NOT NULL DEFAULT 0,
+        total_failure   INTEGER NOT NULL DEFAULT 0,
+        failure_details TEXT,
+        raw_json        TEXT,
+        created_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+        UNIQUE(domain_id, org_name, date_begin)
+      );
+      CREATE INDEX IF NOT EXISTS idx_tls_reports_domain ON tls_reports(domain_id, date_begin);
+    `,
+	},
 ];
 
 let migrated = false;

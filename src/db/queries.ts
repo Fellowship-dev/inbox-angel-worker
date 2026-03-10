@@ -1,4 +1,4 @@
-import { AggregateReport, CheckResult, Customer, Domain, MonitorSubscription, ReportRecord, SpfFlattenConfig } from './types';
+import { AggregateReport, CheckResult, Customer, Domain, MonitorSubscription, ReportRecord, SpfFlattenConfig, MtaStsConfig, MtaStsMode, TlsReport } from './types';
 
 // ── Customers ────────────────────────────────────────────────
 
@@ -532,6 +532,89 @@ export function updateSpfFlattenError(db: D1Database, domainId: number, error: s
 export function deleteSpfFlattenConfig(db: D1Database, domainId: number) {
   return db.prepare(`DELETE FROM spf_flatten_config WHERE domain_id = ?`)
     .bind(domainId).run();
+}
+
+// ── MTA-STS Config ────────────────────────────────────────────
+
+export function getMtaStsConfig(db: D1Database, domainId: number) {
+  return db.prepare(`SELECT * FROM mta_sts_config WHERE domain_id = ?`)
+    .bind(domainId).first<MtaStsConfig>();
+}
+
+export function getMtaStsConfigByDomain(db: D1Database, domain: string) {
+  return db.prepare(`
+    SELECT m.* FROM mta_sts_config m
+    JOIN domains d ON d.id = m.domain_id
+    WHERE d.domain = ? AND m.enabled = 1
+  `).bind(domain).first<MtaStsConfig>();
+}
+
+export function getAllEnabledMtaStsConfigs(db: D1Database) {
+  return db.prepare(`SELECT * FROM mta_sts_config WHERE enabled = 1`).all<MtaStsConfig>();
+}
+
+export function insertMtaStsConfig(
+  db: D1Database,
+  c: Pick<MtaStsConfig, 'domain_id' | 'mode' | 'mx_hosts' | 'policy_id' | 'mta_sts_record_id' | 'tls_rpt_record_id' | 'cname_record_id'>
+) {
+  return db.prepare(`
+    INSERT INTO mta_sts_config
+      (domain_id, mode, mx_hosts, policy_id, mta_sts_record_id, tls_rpt_record_id, cname_record_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).bind(c.domain_id, c.mode, c.mx_hosts, c.policy_id, c.mta_sts_record_id, c.tls_rpt_record_id, c.cname_record_id).run();
+}
+
+export function updateMtaStsMode(db: D1Database, domainId: number, mode: MtaStsMode, policy_id: string) {
+  return db.prepare(`
+    UPDATE mta_sts_config SET mode = ?, policy_id = ?, last_error = NULL, updated_at = unixepoch()
+    WHERE domain_id = ?
+  `).bind(mode, policy_id, domainId).run();
+}
+
+export function updateMtaStsMxHosts(db: D1Database, domainId: number, mx_hosts: string, policy_id: string) {
+  return db.prepare(`
+    UPDATE mta_sts_config SET mx_hosts = ?, policy_id = ?, updated_at = unixepoch()
+    WHERE domain_id = ?
+  `).bind(mx_hosts, policy_id, domainId).run();
+}
+
+export function updateMtaStsError(db: D1Database, domainId: number, error: string) {
+  return db.prepare(`UPDATE mta_sts_config SET last_error = ?, updated_at = unixepoch() WHERE domain_id = ?`)
+    .bind(error, domainId).run();
+}
+
+export function deleteMtaStsConfig(db: D1Database, domainId: number) {
+  return db.prepare(`DELETE FROM mta_sts_config WHERE domain_id = ?`).bind(domainId).run();
+}
+
+// ── TLS Reports ───────────────────────────────────────────────
+
+export function insertTlsReport(db: D1Database, r: Omit<TlsReport, 'id' | 'created_at'>) {
+  return db.prepare(`
+    INSERT INTO tls_reports
+      (domain_id, customer_id, org_name, date_begin, date_end,
+       total_success, total_failure, failure_details, raw_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(domain_id, org_name, date_begin) DO UPDATE SET
+      total_success = excluded.total_success,
+      total_failure = excluded.total_failure,
+      failure_details = excluded.failure_details,
+      raw_json = excluded.raw_json
+  `).bind(
+    r.domain_id, r.customer_id, r.org_name, r.date_begin, r.date_end,
+    r.total_success, r.total_failure, r.failure_details, r.raw_json
+  ).run();
+}
+
+export function getTlsReportSummary(db: D1Database, domainId: number, since: number) {
+  return db.prepare(`
+    SELECT
+      COALESCE(SUM(total_success), 0) AS total_success,
+      COALESCE(SUM(total_failure), 0) AS total_failure,
+      COUNT(*) AS report_count
+    FROM tls_reports
+    WHERE domain_id = ? AND date_begin >= ?
+  `).bind(domainId, since).first<{ total_success: number; total_failure: number; report_count: number }>();
 }
 
 // ── Report Records ───────────────────────────────────────────

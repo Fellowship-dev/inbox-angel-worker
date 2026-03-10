@@ -114,6 +114,37 @@ export interface SpfFlattenConfig {
   updated_at: number;
 }
 
+export type MtaStsMode = 'testing' | 'enforce';
+
+export interface MtaStsConfig {
+  domain_id: number;
+  enabled: 0 | 1;
+  mode: MtaStsMode;
+  mx_hosts: string;           // JSON array of MX hostnames
+  max_age: number;
+  policy_id: string;          // YYYYMMDDHHMMSS — changes when MX or mode changes
+  mta_sts_record_id: string | null;
+  tls_rpt_record_id: string | null;
+  cname_record_id: string | null;
+  last_error: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface TlsReport {
+  id: number;
+  domain_id: number;
+  customer_id: string;
+  org_name: string;
+  date_begin: number;
+  date_end: number;
+  total_success: number;
+  total_failure: number;
+  failure_details: string | null;  // JSON
+  raw_json: string | null;
+  created_at: number;
+}
+
 export interface IpInfoRow {
   ip: string;
   reverse_dns: string | null;
