@@ -68,9 +68,16 @@ function getGuidance(domain: Domain, passRate: number | null, hasData: boolean):
   return { color: '#6b7280', title: 'Unknown policy', body: 'Could not determine guidance for the current policy.' };
 }
 
+const CHART_WINDOWS = [
+  { label: '7d', days: 7 },
+  { label: '30d', days: 30 },
+  { label: '60d', days: 60 },
+];
+
 export function DomainDetail({ id, onUnauthorized }: Props) {
   const [domain, setDomain] = useState<Domain | null>(null);
   const [stats, setStats] = useState<DomainStats | null>(null);
+  const [chartDays, setChartDays] = useState(7);
   const [sources, setSources] = useState<FailingSource[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -78,18 +85,17 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
   const [dnsOk, setDnsOk] = useState<boolean | null>(null);
   const mobile = useIsMobile();
 
+  // Initial load: domain info + failing sources (don't depend on chartDays)
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
-        const [{ domains }, st, src] = await Promise.all([
+        const [{ domains }, src] = await Promise.all([
           getDomains(),
-          getDomainStats(id, 7),
           getDomainSources(id, 7),
         ]);
         if (cancelled) return;
         setDomain(domains.find((d) => d.id === id) ?? null);
-        setStats(st);
         setSources(src.sources);
       } catch (e: any) {
         if (cancelled) return;
@@ -102,6 +108,15 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
     load();
     return () => { cancelled = true; };
   }, [id]);
+
+  // Chart stats — refetch when chartDays changes
+  useEffect(() => {
+    let cancelled = false;
+    getDomainStats(id, chartDays)
+      .then(st => { if (!cancelled) setStats(st); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [id, chartDays]);
 
   const total = stats ? stats.stats.reduce((n, r) => n + r.total, 0) : 0;
 
@@ -173,15 +188,32 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
       </div>
 
       {/* Daily bars */}
-      <h3 style={s.sectionTitle}>Last 7 days</h3>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem', flexWrap: 'wrap', gap: '0.5rem' }}>
+        <h3 style={{ ...s.sectionTitle, marginBottom: 0 }}>Last {chartDays} days</h3>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <div style={{ display: 'flex', gap: '0.25rem' }}>
+            {CHART_WINDOWS.map(w => (
+              <button
+                key={w.days}
+                style={{ ...s.chartPill, ...(chartDays === w.days ? s.chartPillActive : {}) }}
+                onClick={() => setChartDays(w.days)}
+              >
+                {w.label}
+              </button>
+            ))}
+          </div>
+          <a href={`#/domains/${id}/reports`} style={s.viewAll}>All reports →</a>
+        </div>
+      </div>
       {stats.stats.length === 0 && <p style={s.muted}>No data yet.</p>}
       <div style={{ ...s.bars, marginBottom: '2rem' }}>
         {stats.stats.map((row) => {
           const passW = (row.passed / maxTotal) * 100;
           const failW = (row.failed / maxTotal) * 100;
+          const label = chartDays <= 7 ? row.day.slice(5) : row.day.slice(5).replace('-', '/');
           return (
             <a key={row.day} href={`#/domains/${id}/reports/${row.day}`} style={s.barRow}>
-              <span style={s.dayLabel}>{row.day.slice(5)}</span>
+              <span style={{ ...s.dayLabel, fontSize: chartDays > 7 ? '0.65rem' : undefined }}>{label}</span>
               <div style={s.barTrack}>
                 <div style={{ ...s.barPass, width: `${passW}%` }} />
                 <div style={{ ...s.barFail, width: `${failW}%` }} />
@@ -285,6 +317,8 @@ const s = {
   sectionHeader: { display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: '1rem' } as const,
   sectionTitle: { fontSize: '0.875rem', fontWeight: 600, color: '#6b7280', textTransform: 'uppercase' as const, letterSpacing: '0.05em', margin: 0 },
   viewAll: { fontSize: '0.8rem', color: '#6b7280', textDecoration: 'none' } as const,
+  chartPill: { padding: '0.15rem 0.5rem', border: '1px solid #e5e7eb', borderRadius: '20px', fontSize: '0.75rem', cursor: 'pointer', background: '#fff', color: '#6b7280', fontFamily: 'inherit' } as const,
+  chartPillActive: { background: '#111827', color: '#fff', borderColor: '#111827' } as const,
   bars: { display: 'flex', flexDirection: 'column' as const, gap: '0.5rem' },
   barRow: { display: 'flex', alignItems: 'center', gap: '0.75rem', textDecoration: 'none', color: 'inherit', borderRadius: '4px', padding: '2px 4px', margin: '0 -4px' } as const,
   dayLabel: { width: '3rem', fontSize: '0.8rem', color: '#6b7280', flexShrink: 0 } as const,

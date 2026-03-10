@@ -66,6 +66,12 @@ export async function getDomainAnomalies(id: number, days = 30): Promise<{ days:
   return res.json();
 }
 
+export async function getReports(limit = 100): Promise<{ reports: import('./types').AggregateReport[] }> {
+  const res = await apiFetch(`/api/reports?limit=${limit}`);
+  if (!res.ok) await throwApiError(res);
+  return res.json();
+}
+
 export async function getCheckResults(): Promise<{ results: import('./types').CheckResult[] }> {
   const res = await apiFetch('/api/check-results');
   if (!res.ok) await throwApiError(res);

@@ -81,6 +81,18 @@ export interface CheckResult {
   created_at: number;
 }
 
+export interface AggregateReport {
+  id: number;
+  domain: string;
+  org_name: string;
+  report_id: string;
+  date_begin: number; // unix timestamp
+  date_end: number;   // unix timestamp
+  total_count: number;
+  pass_count: number;
+  fail_count: number;
+}
+
 export interface DayReport {
   date: string;
   domain: string;
