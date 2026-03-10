@@ -11,6 +11,43 @@ interface Props {
   onSave: (token: string) => void;
 }
 
+const STARTUP_MESSAGES = [
+  { after: 0,  text: 'Starting up' },
+  { after: 6,  text: 'Running database setup' },
+  { after: 20, text: 'Setting up your instance' },
+  { after: 40, text: 'Almost there' },
+];
+
+function StartupLoader() {
+  const [elapsed, setElapsed] = useState(0);
+  const [dots, setDots] = useState('');
+
+  useEffect(() => {
+    const tick = setInterval(() => {
+      setElapsed(e => e + 1);
+      setDots(d => d.length >= 3 ? '' : d + '.');
+    }, 1000);
+    return () => clearInterval(tick);
+  }, []);
+
+  const msg = [...STARTUP_MESSAGES].reverse().find(m => elapsed >= m.after)?.text ?? 'Starting up';
+  const isSlowStart = elapsed >= 6;
+
+  return (
+    <div style={s.wrap}>
+      <div style={{ ...s.box, alignItems: 'center', gap: '0.75rem' }}>
+        <div style={s.logo}>🪄 InboxAngel</div>
+        <p style={{ ...s.muted, margin: 0 }}>{msg}{dots}</p>
+        {isSlowStart && (
+          <p style={{ ...s.muted, fontSize: '0.75rem', margin: 0 }}>
+            First startup runs database migrations — only happens once.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function loadTurnstileScript() {
   if (document.querySelector('script[data-cf-turnstile]')) return;
   const s = document.createElement('script');
@@ -116,11 +153,7 @@ export function AuthGate({ onSave }: Props) {
   };
 
   if (!status) {
-    return (
-      <div style={s.wrap}>
-        <div style={s.box}><p style={s.muted}>Loading…</p></div>
-      </div>
-    );
+    return <StartupLoader />;
   }
 
   if (view === 'forgot') {
