@@ -10,7 +10,7 @@ export interface SpfRecord {
   raw: string;
   mechanisms: string[];  // e.g. ["ip4:1.2.3.4", "include:sendgrid.net", "~all"]
   verdict: 'strict' | 'soft' | 'open' | 'missing';
-  lookup_count: number;  // total DNS lookups required to evaluate this record
+  lookup_count?: number;  // total DNS lookups required to evaluate this record (set by lookupSpf, not parseSpfRecord)
 }
 
 export interface DkimRecord {

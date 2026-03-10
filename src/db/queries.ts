@@ -1,4 +1,4 @@
-import { AggregateReport, CheckResult, Customer, Domain, MonitorSubscription, ReportRecord } from './types';
+import { AggregateReport, CheckResult, Customer, Domain, MonitorSubscription, ReportRecord, SpfFlattenConfig } from './types';
 
 // ── Customers ────────────────────────────────────────────────
 
@@ -466,6 +466,63 @@ export function getPasswordResetToken(db: D1Database, token: string) {
 
 export function markResetTokenUsed(db: D1Database, token: string) {
   return db.prepare(`UPDATE password_reset_tokens SET used_at = unixepoch() WHERE token = ?`).bind(token).run();
+}
+
+// ── SPF Flatten Config ────────────────────────────────────────
+
+export function getSpfFlattenConfig(db: D1Database, domainId: number) {
+  return db.prepare(`SELECT * FROM spf_flatten_config WHERE domain_id = ?`)
+    .bind(domainId).first<SpfFlattenConfig>();
+}
+
+export function getAllEnabledSpfFlattenConfigs(db: D1Database) {
+  return db.prepare(`SELECT * FROM spf_flatten_config WHERE enabled = 1`)
+    .all<SpfFlattenConfig>();
+}
+
+export function upsertSpfFlattenConfig(
+  db: D1Database,
+  c: Pick<SpfFlattenConfig, 'domain_id' | 'canonical_record' | 'lookup_count' | 'cf_record_id'>
+) {
+  return db.prepare(`
+    INSERT INTO spf_flatten_config (domain_id, enabled, cf_record_id, canonical_record, lookup_count)
+    VALUES (?, 1, ?, ?, ?)
+    ON CONFLICT(domain_id) DO UPDATE SET
+      enabled = 1,
+      cf_record_id = COALESCE(excluded.cf_record_id, cf_record_id),
+      canonical_record = excluded.canonical_record,
+      lookup_count = excluded.lookup_count,
+      last_error = NULL,
+      updated_at = unixepoch()
+  `).bind(c.domain_id, c.cf_record_id, c.canonical_record, c.lookup_count).run();
+}
+
+export function updateSpfFlattenResult(
+  db: D1Database,
+  domainId: number,
+  flattened_record: string,
+  ip_count: number,
+  cf_record_id: string
+) {
+  return db.prepare(`
+    UPDATE spf_flatten_config
+    SET flattened_record = ?, ip_count = ?, cf_record_id = ?,
+        last_flattened_at = unixepoch(), last_error = NULL, updated_at = unixepoch()
+    WHERE domain_id = ?
+  `).bind(flattened_record, ip_count, cf_record_id, domainId).run();
+}
+
+export function updateSpfFlattenError(db: D1Database, domainId: number, error: string) {
+  return db.prepare(`
+    UPDATE spf_flatten_config
+    SET last_error = ?, updated_at = unixepoch()
+    WHERE domain_id = ?
+  `).bind(error, domainId).run();
+}
+
+export function deleteSpfFlattenConfig(db: D1Database, domainId: number) {
+  return db.prepare(`DELETE FROM spf_flatten_config WHERE domain_id = ?`)
+    .bind(domainId).run();
 }
 
 // ── Report Records ───────────────────────────────────────────

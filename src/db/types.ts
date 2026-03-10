@@ -99,6 +99,20 @@ export interface ReportRecord {
   created_at: number;
 }
 
+export interface SpfFlattenConfig {
+  domain_id: number;
+  enabled: 0 | 1;
+  cf_record_id: string | null;
+  canonical_record: string;
+  flattened_record: string | null;
+  ip_count: number | null;
+  lookup_count: number | null;
+  last_flattened_at: number | null;
+  last_error: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 export interface IpInfoRow {
   ip: string;
   reverse_dns: string | null;

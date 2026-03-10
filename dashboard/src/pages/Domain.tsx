@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'preact/hooks';
-import { getDomains, getDomainStats, getDomainSources, checkDomainDns } from '../api';
-import type { Domain, DomainStats, FailingSource } from '../types';
+import { getDomains, getDomainStats, getDomainSources, checkDomainDns, getSpfFlattenStatus, enableSpfFlatten, disableSpfFlatten } from '../api';
+import type { Domain, DomainStats, FailingSource, SpfFlatStatus } from '../types';
 import { useIsMobile } from '../hooks';
 
 interface Props {
@@ -83,6 +83,9 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [dnsOk, setDnsOk] = useState<boolean | null>(null);
+  const [spfFlat, setSpfFlat] = useState<SpfFlatStatus | null>(null);
+  const [spfFlatBusy, setSpfFlatBusy] = useState(false);
+  const [spfFlatError, setSpfFlatError] = useState<string | null>(null);
   const mobile = useIsMobile();
 
   // Initial load: domain info + failing sources (don't depend on chartDays)
@@ -90,13 +93,15 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
     let cancelled = false;
     async function load() {
       try {
-        const [{ domains }, src] = await Promise.all([
+        const [{ domains }, src, flat] = await Promise.all([
           getDomains(),
           getDomainSources(id, 7),
+          getSpfFlattenStatus(id).catch(() => null),
         ]);
         if (cancelled) return;
         setDomain(domains.find((d) => d.id === id) ?? null);
         setSources(src.sources);
+        if (flat) setSpfFlat(flat);
       } catch (e: any) {
         if (cancelled) return;
         if (e.message === '401') { onUnauthorized(); return; }
@@ -238,6 +243,40 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
         </p>
       </div>
 
+      {/* SPF health card — only shown when CF creds present or flattening already active */}
+      {spfFlat && (spfFlat.available || spfFlat.config) && (
+        <SpfHealthCard
+          domainId={id}
+          status={spfFlat}
+          busy={spfFlatBusy}
+          error={spfFlatError}
+          onEnable={async () => {
+            setSpfFlatBusy(true);
+            setSpfFlatError(null);
+            try {
+              const { config } = await enableSpfFlatten(id);
+              setSpfFlat({ available: true, config });
+            } catch (e: any) {
+              setSpfFlatError(e.message ?? 'Failed to enable');
+            } finally {
+              setSpfFlatBusy(false);
+            }
+          }}
+          onDisable={async () => {
+            setSpfFlatBusy(true);
+            setSpfFlatError(null);
+            try {
+              await disableSpfFlatten(id);
+              setSpfFlat({ available: spfFlat.available, config: null });
+            } catch (e: any) {
+              setSpfFlatError(e.message ?? 'Failed to disable');
+            } finally {
+              setSpfFlatBusy(false);
+            }
+          }}
+        />
+      )}
+
       {/* Failing sources */}
       {sources.length > 0 && (
         <div>
@@ -284,6 +323,129 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function SpfHealthCard({
+  domainId, status, busy, error, onEnable, onDisable,
+}: {
+  domainId: number;
+  status: SpfFlatStatus;
+  busy: boolean;
+  error: string | null;
+  onEnable: () => void;
+  onDisable: () => void;
+}) {
+  const { config } = status;
+  const lookupCount = config?.lookup_count ?? null;
+  const isHigh = lookupCount !== null && lookupCount >= 8;
+  const isOver = lookupCount !== null && lookupCount >= 10;
+
+  const countColor = isOver ? '#b91c1c' : isHigh ? '#92400e' : '#15803d';
+  const countBg   = isOver ? '#fee2e2' : isHigh ? '#fef3c7' : '#dcfce7';
+
+  const borderColor = config
+    ? '#16a34a'
+    : isOver ? '#dc2626'
+    : isHigh ? '#d97706'
+    : '#e5e7eb';
+
+  const lastSync = config?.last_flattened_at
+    ? new Date(config.last_flattened_at * 1000).toLocaleString('en-GB', {
+        day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+      })
+    : null;
+
+  return (
+    <div style={{
+      border: '1px solid #e5e7eb',
+      borderLeft: `4px solid ${borderColor}`,
+      borderRadius: '8px',
+      padding: '1rem 1.25rem',
+      marginBottom: '2rem',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '1rem', flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.3rem' }}>
+            <span style={{ fontWeight: 700, fontSize: '0.875rem' }}>SPF lookup depth</span>
+            {lookupCount !== null && (
+              <span style={{
+                padding: '1px 7px', borderRadius: '9999px', fontSize: '0.72rem', fontWeight: 700,
+                color: countColor, background: countBg,
+              }}>
+                {lookupCount}/10
+              </span>
+            )}
+            {config && (
+              <span style={{
+                padding: '1px 7px', borderRadius: '9999px', fontSize: '0.72rem', fontWeight: 700,
+                color: '#15803d', background: '#dcfce7',
+              }}>
+                ✓ flattening active
+              </span>
+            )}
+          </div>
+          <p style={{ margin: 0, fontSize: '0.8rem', color: '#6b7280', lineHeight: 1.5 }}>
+            {config
+              ? `${config.ip_count ?? '?'} IPs in flattened record — lookup count reduced to 1. Re-resolved daily.${lastSync ? ` Last synced ${lastSync}.` : ''}`
+              : isOver
+              ? 'SPF requires more than 10 DNS lookups — receivers may return permerror and silently drop your mail. Enable flattening to resolve all includes to raw IPs.'
+              : isHigh
+              ? `SPF requires ${lookupCount}/10 lookups — close to the limit. Adding another mail provider could break delivery. Consider enabling flattening.`
+              : lookupCount !== null
+              ? `SPF requires ${lookupCount}/10 DNS lookups — within safe limits.`
+              : 'SPF lookup depth not yet measured — send a test email via Email check to populate this.'}
+          </p>
+          {config?.last_error && (
+            <p style={{ margin: '0.4rem 0 0', fontSize: '0.75rem', color: '#dc2626' }}>
+              Last error: {config.last_error}
+            </p>
+          )}
+          {error && (
+            <p style={{ margin: '0.4rem 0 0', fontSize: '0.75rem', color: '#dc2626' }}>{error}</p>
+          )}
+          {config?.canonical_record && (
+            <details style={{ marginTop: '0.5rem' }}>
+              <summary style={{ fontSize: '0.75rem', color: '#9ca3af', cursor: 'pointer' }}>
+                Original record
+              </summary>
+              <code style={{
+                display: 'block', marginTop: '0.3rem', fontSize: '0.72rem',
+                background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '4px',
+                padding: '0.35rem 0.5rem', wordBreak: 'break-all', color: '#374151',
+              }}>{config.canonical_record}</code>
+            </details>
+          )}
+        </div>
+        <div style={{ flexShrink: 0 }}>
+          {config ? (
+            <button
+              onClick={onDisable}
+              disabled={busy}
+              style={{
+                padding: '0.35rem 0.85rem', fontSize: '0.8rem', cursor: busy ? 'default' : 'pointer',
+                background: '#fff', color: '#6b7280', border: '1px solid #d1d5db',
+                borderRadius: '6px', opacity: busy ? 0.6 : 1,
+              }}
+            >
+              {busy ? 'Working…' : 'Disable'}
+            </button>
+          ) : (isHigh || isOver) && (
+            <button
+              onClick={onEnable}
+              disabled={busy}
+              style={{
+                padding: '0.35rem 0.85rem', fontSize: '0.8rem', cursor: busy ? 'default' : 'pointer',
+                background: '#111827', color: '#fff', border: 'none',
+                borderRadius: '6px', opacity: busy ? 0.6 : 1,
+              }}
+            >
+              {busy ? 'Flattening…' : 'Enable flattening'}
+            </button>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

@@ -212,6 +212,25 @@ const MIGRATIONS: { version: number; sql: string }[] = [
 		version: 11,
 		sql: `ALTER TABLE check_results ADD COLUMN spf_lookup_count INTEGER;`,
 	},
+	{
+		// SPF flattening config — per-domain setting to auto-resolve includes to raw IPs
+		version: 12,
+		sql: `
+      CREATE TABLE IF NOT EXISTS spf_flatten_config (
+        domain_id INTEGER PRIMARY KEY REFERENCES domains(id) ON DELETE CASCADE,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        cf_record_id TEXT,
+        canonical_record TEXT NOT NULL,
+        flattened_record TEXT,
+        ip_count INTEGER,
+        lookup_count INTEGER,
+        last_flattened_at INTEGER,
+        last_error TEXT,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+    `,
+	},
 ];
 
 let migrated = false;

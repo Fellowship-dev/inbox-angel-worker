@@ -94,6 +94,22 @@ export interface AggregateReport {
   fail_count: number;
 }
 
+export interface SpfFlatConfig {
+  enabled: number;                 // 0 | 1
+  cf_record_id: string | null;
+  canonical_record: string;
+  flattened_record: string | null;
+  ip_count: number | null;
+  lookup_count: number | null;
+  last_flattened_at: number | null;
+  last_error: string | null;
+}
+
+export interface SpfFlatStatus {
+  available: boolean;
+  config: SpfFlatConfig | null;
+}
+
 export interface DayReport {
   date: string;
   domain: string;

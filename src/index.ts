@@ -1,11 +1,12 @@
 import { handleEmail } from './email/handler';
 import { handleApi } from './api/router';
-import { getActiveSubscriptions, updateSubscriptionBaseline } from './db/queries';
+import { getActiveSubscriptions, updateSubscriptionBaseline, getAllEnabledSpfFlattenConfigs, updateSpfFlattenResult, updateSpfFlattenError, getDomainById } from './db/queries';
 import { checkSubscription } from './monitor/check';
 import { sendChangeNotification } from './monitor/notify';
 import { sendWeeklyDigests } from './digest/weekly';
 import { ensureMigrated } from './db/migrate';
 import { reportsDomain, fromEmail } from './env-utils';
+import { flattenSpf } from './email/spf-flattener';
 
 export interface Env {
   DB: D1Database | undefined;
@@ -64,6 +65,31 @@ export default {
     // Weekly digest — every Monday 9am UTC
     if (event.cron === '0 9 * * 1') {
       await sendWeeklyDigests(derivedEnv);
+      return;
+    }
+
+    // Daily SPF flatten refresh — every day 10am UTC
+    if (event.cron === '0 10 * * *') {
+      if (env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ZONE_ID) {
+        const { results: configs } = await getAllEnabledSpfFlattenConfigs(env.DB);
+        console.log(`[spf-flatten] refreshing ${configs.length} flattened domains`);
+        for (const config of configs) {
+          const domain = await getDomainById(env.DB, config.domain_id);
+          if (!domain) continue;
+          try {
+            const result = await flattenSpf(domain.domain, {
+              CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN,
+              CLOUDFLARE_ZONE_ID: env.CLOUDFLARE_ZONE_ID,
+            }, config.cf_record_id);
+            await updateSpfFlattenResult(env.DB, config.domain_id, result.flattened_record, result.ip_count, result.cf_record_id);
+            console.log(`[spf-flatten] ${domain.domain}: updated (${result.ip_count} IPs)`);
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            await updateSpfFlattenError(env.DB, config.domain_id, msg);
+            console.error(`[spf-flatten] ${domain.domain}: error — ${msg}`);
+          }
+        }
+      }
       return;
     }
 

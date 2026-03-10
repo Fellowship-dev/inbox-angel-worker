@@ -29,6 +29,9 @@
 //   GET    /api/domains/:id/explore           — all sources with pass/fail (days, max 90)
 //   GET    /api/domains/:id/anomalies         — failing sources with Active/Older split
 //   GET    /api/domains/:id/dns-check         — check _dmarc TXT record in DNS
+//   GET    /api/domains/:id/spf-flatten       — SPF flatten config + availability
+//   POST   /api/domains/:id/spf-flatten       — enable SPF flattening (triggers initial flatten)
+//   DELETE /api/domains/:id/spf-flatten       — disable + restore canonical record
 //   GET    /api/domains/:id/monitor-subs      — list monitoring subscriptions
 //   PATCH  /api/domains/:id/alerts            — toggle domain-level alerts on/off
 //   PATCH  /api/monitor-subs/:id             — toggle subscription active status
@@ -86,6 +89,15 @@ import { ensureEmailRouting } from '../setup/email-routing';
 import { track } from '../telemetry';
 import { debug } from '../debug';
 import { reportsDomain, fromEmail } from '../env-utils';
+import { flattenSpf, restoreSpf } from '../email/spf-flattener';
+import { lookupSpf } from '../email/dns-check';
+import {
+  getSpfFlattenConfig,
+  upsertSpfFlattenConfig,
+  updateSpfFlattenResult,
+  updateSpfFlattenError,
+  deleteSpfFlattenConfig,
+} from '../db/queries';
 
 // ── Helpers ───────────────────────────────────────────────────
 
@@ -832,6 +844,86 @@ export async function handleApi(
       if (actor.id === teamMemberMatch[1]) return err('cannot remove yourself', 400);
       await deleteUser(env.DB, teamMemberMatch[1]);
       return json({ ok: true });
+    }
+
+    // SPF flatten routes — GET/POST/DELETE /api/domains/:id/spf-flatten
+    const spfFlattenMatch = path.match(/^\/api\/domains\/([^/]+)\/spf-flatten$/);
+    if (spfFlattenMatch) {
+      const id = parseInt(spfFlattenMatch[1], 10);
+      if (isNaN(id)) return err('invalid domain id', 400);
+      const domain = await getDomainById(env.DB, id);
+      if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+
+      const available = !!(env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ZONE_ID);
+
+      // GET — return current config + availability
+      if (method === 'GET') {
+        const config = await getSpfFlattenConfig(env.DB, id);
+        return json({ available, config: config ?? null });
+      }
+
+      // POST — enable + trigger initial flatten
+      if (method === 'POST') {
+        if (!available) return err('Cloudflare credentials not configured (CLOUDFLARE_API_TOKEN + CLOUDFLARE_ZONE_ID required)', 422);
+
+        const flatEnv = {
+          CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN!,
+          CLOUDFLARE_ZONE_ID: env.CLOUDFLARE_ZONE_ID!,
+        };
+
+        // Walk lookup count first (for display)
+        const spfRecord = await lookupSpf(domain.domain);
+        const lookup_count = spfRecord?.lookup_count ?? null;
+
+        // Do initial flatten
+        let result;
+        try {
+          result = await flattenSpf(domain.domain, flatEnv);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          // Save config with error so user can see it
+          await upsertSpfFlattenConfig(env.DB, {
+            domain_id: id,
+            canonical_record: spfRecord?.raw ?? '',
+            lookup_count,
+            cf_record_id: null,
+          });
+          await updateSpfFlattenError(env.DB, id, msg);
+          return err(msg, 422);
+        }
+
+        await upsertSpfFlattenConfig(env.DB, {
+          domain_id: id,
+          canonical_record: result.canonical_record,
+          lookup_count,
+          cf_record_id: result.cf_record_id,
+        });
+        await updateSpfFlattenResult(env.DB, id, result.flattened_record, result.ip_count, result.cf_record_id);
+
+        const config = await getSpfFlattenConfig(env.DB, id);
+        return json({ ok: true, config }, 201);
+      }
+
+      // DELETE — disable + restore canonical record
+      if (method === 'DELETE') {
+        const config = await getSpfFlattenConfig(env.DB, id);
+        if (!config) return err('SPF flattening not configured for this domain', 404);
+
+        if (available && config.cf_record_id && config.canonical_record) {
+          try {
+            await restoreSpf(domain.domain, config.cf_record_id, config.canonical_record, {
+              CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN!,
+              CLOUDFLARE_ZONE_ID: env.CLOUDFLARE_ZONE_ID!,
+            });
+          } catch (e) {
+            console.warn(`[spf-flatten] restore failed for ${domain.domain}:`, e);
+            // Non-fatal — delete config anyway so user can retry
+          }
+        }
+
+        await deleteSpfFlattenConfig(env.DB, id);
+        return new Response(null, { status: 204 });
+      }
     }
 
     return err('not found', 404);

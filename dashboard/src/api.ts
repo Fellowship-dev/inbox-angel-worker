@@ -161,6 +161,23 @@ export async function removeTeamMember(id: string): Promise<void> {
   if (!res.ok) await throwApiError(res);
 }
 
+export async function getSpfFlattenStatus(domainId: number): Promise<import('./types').SpfFlatStatus> {
+  const res = await apiFetch(`/api/domains/${domainId}/spf-flatten`);
+  if (!res.ok) await throwApiError(res);
+  return res.json();
+}
+
+export async function enableSpfFlatten(domainId: number): Promise<{ ok: boolean; config: import('./types').SpfFlatConfig }> {
+  const res = await apiFetch(`/api/domains/${domainId}/spf-flatten`, { method: 'POST' });
+  if (!res.ok) await throwApiError(res);
+  return res.json();
+}
+
+export async function disableSpfFlatten(domainId: number): Promise<void> {
+  const res = await apiFetch(`/api/domains/${domainId}/spf-flatten`, { method: 'DELETE' });
+  if (!res.ok) await throwApiError(res);
+}
+
 export async function logout(): Promise<void> {
   await apiFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
   localStorage.removeItem('ia_api_key');
