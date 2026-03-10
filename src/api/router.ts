@@ -1054,6 +1054,126 @@ async function _handleApi(
       return json({ ok: true, policy, record: newRecord });
     }
 
+    // GET /api/domains/:id/onboarding-status — DMARC + SPF + DKIM + routing health check
+    const onboardingMatch = path.match(/^\/api\/domains\/([^/]+)\/onboarding-status$/);
+    if (onboardingMatch && method === 'GET') {
+      const id = parseInt(onboardingMatch[1], 10);
+      if (isNaN(id)) return err('invalid domain id', 400);
+      const domain = await getDomainById(env.DB, id);
+      if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+
+      const rd = reportsDomain(env);
+      const DKIM_SELECTORS = ['google', 'selector1', 'selector2', 'mail', 'default', 'k1', 'dkim', 'mandrill', 'mailjet', 'sendgrid', 'smtp', 'pm', 'brevo', 'resend', 'mxroute', 'zoho'];
+
+      const [dmarcData, routingData, dkimData] = await Promise.all([
+        // DMARC: DoH lookup for _dmarc.{domain}
+        fetch(`https://cloudflare-dns.com/dns-query?name=_dmarc.${domain.domain}&type=TXT`, { headers: { Accept: 'application/dns-json' } })
+          .then(r => r.json() as Promise<{ Answer?: { data: string }[] }>)
+          .then(d => {
+            const records = d.Answer ?? [];
+            const current_record = records[0]?.data?.replace(/^"|"$/g, '') ?? null;
+            return { found: records.length > 0, has_our_rua: records.some(r => r.data.includes(domain.rua_address)), current_record };
+          })
+          .catch(() => ({ found: false, has_our_rua: false, current_record: null })),
+
+        // Routing: MX check on reports domain
+        rd
+          ? fetch(`https://cloudflare-dns.com/dns-query?name=${rd}&type=MX`, { headers: { Accept: 'application/dns-json' } })
+              .then(r => r.json() as Promise<{ Answer?: unknown[] }>)
+              .then(d => ({ mx_found: (d.Answer ?? []).length > 0 }))
+              .catch(() => ({ mx_found: false }))
+          : Promise.resolve({ mx_found: false }),
+
+        // DKIM: CF API if available (full zone scan), else DoH for common selectors
+        (async () => {
+          if (env.CLOUDFLARE_API_TOKEN && getZoneId()) {
+            try {
+              const res = await fetch(
+                `https://api.cloudflare.com/client/v4/zones/${getZoneId()}/dns_records?type=TXT&per_page=100`,
+                { headers: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` } }
+              );
+              const data = await res.json() as { result?: { name: string; content: string }[] };
+              if (data.result !== undefined) {
+                const found = data.result.filter(r => r.name.includes('_domainkey'));
+                return { selectors: found.map(r => ({ name: r.name, record: r.content })), source: 'cf' as const };
+              }
+            } catch {}
+          }
+          // DoH fallback
+          const hits = await Promise.all(DKIM_SELECTORS.map(async sel => {
+            try {
+              const d = await fetch(`https://cloudflare-dns.com/dns-query?name=${sel}._domainkey.${domain.domain}&type=TXT`, { headers: { Accept: 'application/dns-json' } })
+                .then(r => r.json() as Promise<{ Answer?: { data: string }[] }>);
+              if ((d.Answer ?? []).length > 0)
+                return { name: `${sel}._domainkey.${domain.domain}`, record: d.Answer![0].data.replace(/^"|"$/g, '') };
+            } catch {}
+            return null;
+          }));
+          return { selectors: hits.filter(Boolean) as { name: string; record: string }[], source: 'doh' as const };
+        })(),
+      ]);
+
+      return json({
+        domain_id: domain.id,
+        domain: domain.domain,
+        rua_address: domain.rua_address,
+        cf_available: !!(env.CLOUDFLARE_API_TOKEN && getZoneId()),
+        dmarc: dmarcData,
+        spf: { record: domain.spf_record ?? null, lookup_count: domain.spf_lookup_count ?? null },
+        dkim: dkimData,
+        routing: { ...routingData, reports_domain: rd ?? null },
+      });
+    }
+
+    // POST /api/domains/:id/apply-dmarc — create or update _dmarc.{domain} TXT in CF DNS
+    const applyDmarcMatch = path.match(/^\/api\/domains\/([^/]+)\/apply-dmarc$/);
+    if (applyDmarcMatch && method === 'POST') {
+      const id = parseInt(applyDmarcMatch[1], 10);
+      if (isNaN(id)) return err('invalid domain id', 400);
+      const domain = await getDomainById(env.DB, id);
+      if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+      if (!env.CLOUDFLARE_API_TOKEN || !getZoneId()) return err('Cloudflare credentials not configured', 400);
+
+      const body = await parseBody<{ record?: string }>(request);
+      if (!body.record) return err('record content is required', 400);
+
+      const zoneId = getZoneId()!;
+      const token = env.CLOUDFLARE_API_TOKEN;
+      const recordName = `_dmarc.${domain.domain}`;
+
+      // Find existing record
+      const searchData = await fetch(
+        `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records?type=TXT&name=${encodeURIComponent(recordName)}&per_page=5`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      ).then(r => r.json() as Promise<{ result?: { id: string }[] }>);
+      const existingId = searchData.result?.[0]?.id;
+
+      const cfRes = existingId
+        ? await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records/${existingId}`, {
+            method: 'PATCH',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: body.record }),
+          })
+        : await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'TXT', name: recordName, content: body.record, ttl: 3600 }),
+          });
+
+      const cfData = await cfRes.json() as { success: boolean; result?: { id: string }; errors?: { message: string }[] };
+      if (!cfData.success) return err(cfData.errors?.map(e => e.message).join(', ') ?? 'CF DNS update failed', 500);
+
+      logAudit(env.DB!, {
+        customer_id: customerId,
+        actor_id: userBySession?.id ?? null, actor_email: userBySession?.email ?? null, actor_type: 'user',
+        action: existingId ? 'dns.update' : 'dns.create',
+        resource_type: 'dns_record', resource_id: cfData.result?.id ?? '', resource_name: recordName,
+        after_value: { type: 'TXT', name: recordName, content: body.record },
+      }, ctx);
+
+      return json({ ok: true, record: body.record, created: !existingId });
+    }
+
     // DELETE /api/domains/:id
     const domainDeleteMatch = path.match(/^\/api\/domains\/([^/]+)$/);
     if (domainDeleteMatch && method === 'DELETE') {

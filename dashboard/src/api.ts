@@ -251,3 +251,15 @@ export async function logout(): Promise<void> {
   await apiFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
   localStorage.removeItem('ia_api_key');
 }
+
+export async function getOnboardingStatus(domainId: number): Promise<import('./types').OnboardingStatus> {
+  const res = await apiFetch(`/api/domains/${domainId}/onboarding-status`);
+  if (!res.ok) await throwApiError(res);
+  return res.json();
+}
+
+export async function applyDmarc(domainId: number, record: string): Promise<{ ok: boolean; record: string; created: boolean }> {
+  const res = await apiFetch(`/api/domains/${domainId}/apply-dmarc`, { method: 'POST', body: JSON.stringify({ record }) });
+  if (!res.ok) await throwApiError(res);
+  return res.json();
+}

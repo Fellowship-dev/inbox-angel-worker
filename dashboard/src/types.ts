@@ -158,3 +158,29 @@ export interface DayReport {
   summary: { total: number; passed: number; failed: number };
   sources: ReportSource[];
 }
+
+
+export interface OnboardingStatus {
+  domain_id: number;
+  domain: string;
+  rua_address: string;
+  cf_available: boolean;
+  dmarc: {
+    found: boolean;
+    has_our_rua: boolean;
+    current_record: string | null;
+    rua_address: string;
+  };
+  spf: {
+    record: string | null;
+    lookup_count: number | null;
+  };
+  dkim: {
+    selectors: { name: string; record: string }[];
+    source: 'cf' | 'doh';
+  };
+  routing: {
+    mx_found: boolean;
+    reports_domain: string | null;
+  };
+}

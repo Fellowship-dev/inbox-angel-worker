@@ -13,6 +13,7 @@ import { Team } from './pages/Team';
 import { AuditLog } from './pages/AuditLog';
 import { AcceptInvite } from './pages/AcceptInvite';
 import { ResetPassword } from './pages/ResetPassword';
+import { Onboarding } from './pages/Onboarding';
 import { AuthGate } from './AuthGate';
 import { getVersion, logout, type VersionInfo } from './api';
 
@@ -118,6 +119,9 @@ export function App() {
   const mobile = useIsMobile();
 
   if (!hasKey) return <AuthGate onSave={() => setHasKey(true)} />;
+
+  // Onboarding wizard — full-screen, no nav shell
+  if (route === '/onboarding') return <Onboarding />;
 
   return (
     <div style={{ ...styles.shell, padding: mobile ? '0 1rem' : '0 1.5rem' }}>

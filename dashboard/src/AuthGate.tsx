@@ -241,8 +241,11 @@ export function AuthGate({ onSave }: Props) {
               <p style={s.muted}>You can skip this for now and verify later — just know you won't receive emails until it's done.</p>
             </>
           )}
-          <button type="button" style={s.btn} onClick={() => onSave(pendingToken)}>
-            Continue to dashboard →
+          <button type="button" style={s.btn} onClick={() => {
+            window.location.hash = '#/onboarding';
+            onSave(pendingToken);
+          }}>
+            Set up your domain →
           </button>
         </div>
       </div>
