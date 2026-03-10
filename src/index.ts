@@ -1,12 +1,13 @@
 import { handleEmail } from './email/handler';
 import { handleApi } from './api/router';
-import { getActiveSubscriptions, updateSubscriptionBaseline, getAllEnabledSpfFlattenConfigs, updateSpfFlattenResult, updateSpfFlattenError, getDomainById, getAllDomains, updateDomainSpfLookupCount, getAllEnabledMtaStsConfigs, getMtaStsConfigByDomain, updateMtaStsMxHosts, updateMtaStsError } from './db/queries';
+import { getActiveSubscriptions, updateSubscriptionBaseline, getAllEnabledSpfFlattenConfigs, updateSpfFlattenResult, updateSpfFlattenError, getDomainById, getAllDomains, updateDomainSpfLookupCount, getAllEnabledMtaStsConfigs, getMtaStsConfigByDomain, updateMtaStsMxHosts, updateMtaStsError, getHeartbeatStats } from './db/queries';
 import { checkSubscription } from './monitor/check';
 import { sendChangeNotification } from './monitor/notify';
 import { sendWeeklyDigests } from './digest/weekly';
 import { ensureMigrated } from './db/migrate';
 import { reportsDomain, fromEmail, enrichEnv, getZoneId } from './env-utils';
 import { logAudit } from './audit/log';
+import { track } from './telemetry';
 import { flattenSpf } from './email/spf-flattener';
 import { lookupSpf } from './email/dns-check';
 import { discoverMxHosts, generatePolicyId, buildPolicyFile, updateMtaStsTxtRecord } from './email/mta-sts';
@@ -82,6 +83,17 @@ export default {
     const rd = reportsDomain(env) ?? '';
     const fe = fromEmail(env) ?? '';
     const derivedEnv = { ...env, REPORTS_DOMAIN: rd, FROM_EMAIL: fe };
+
+    // Daily telemetry heartbeat — every day 11am UTC
+    if (event.cron === '0 11 * * *') {
+      try {
+        const stats = await getHeartbeatStats(env.DB!);
+        await track(env, { event: 'instance.heartbeat', ...stats });
+      } catch (e) {
+        console.error('[telemetry] heartbeat failed:', e);
+      }
+      return;
+    }
 
     // Weekly digest — every Monday 9am UTC
     if (event.cron === '0 9 * * 1') {

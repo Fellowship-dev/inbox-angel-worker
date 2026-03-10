@@ -20,13 +20,13 @@ export async function handleEmail(
   debug(env, 'email.inbound', { to, from: message.from, route: localPart === 'rua' ? 'dmarc-report' : localPart === 'tls-rpt' ? 'tls-rpt' : 'free-check' });
 
   if (localPart === 'rua') {
-    track(env, 'report.received'); // fire-and-forget
-    await handleDmarcReport(message, env);
+    const { failure_count } = await handleDmarcReport(message, env);
+    track(env, { event: 'report.received', failure_count }); // fire-and-forget
   } else if (localPart === 'tls-rpt') {
-    track(env, 'tls-rpt.received'); // fire-and-forget
-    await handleTlsRptReport(message, env);
+    const { failure_count } = await handleTlsRptReport(message, env);
+    track(env, { event: 'tls-rpt.received', failure_count }); // fire-and-forget
   } else {
-    track(env, 'check.received'); // fire-and-forget
-    await handleFreeCheck(message, env, localPart);
+    const { result } = await handleFreeCheck(message, env, localPart);
+    track(env, { event: 'check.received', result }); // fire-and-forget
   }
 }

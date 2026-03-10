@@ -221,7 +221,7 @@ async function addDomain(request: Request, env: Env, customerId: string, userEma
     );
   }
 
-  track(env, 'domain.add'); // fire-and-forget, non-blocking
+  track(env, { event: 'domain.add' }); // fire-and-forget, non-blocking
 
   logAudit(env.DB!, {
     customer_id: customerId,
@@ -620,7 +620,7 @@ async function _handleApi(
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
     const token = Array.from(crypto.getRandomValues(new Uint8Array(8)))
       .map(b => chars[b % chars.length]).join('');
-    track(env, 'check.created'); // fire-and-forget
+    track(env, { event: 'check.created' }); // fire-and-forget
     return json({ token, email: `${token}@${rd}` }, 201);
   }
 
@@ -707,6 +707,7 @@ async function _handleApi(
       after_value: { email, role: 'admin' },
       meta: { ip },
     }, ctx);
+    track(env, { event: 'instance.born' }); // fire-and-forget
     return json({ token }, 201);
   }
 
@@ -986,6 +987,7 @@ async function _handleApi(
         const records = doh.Answer ?? [];
         const found = records.length > 0;
         const has_rua = records.some(r => r.data.includes(domain.rua_address));
+        if (found) track(env, { event: 'domain.dns_verified' }); // fire-and-forget
         return json({ found, has_rua });
       } catch {
         return json({ found: false, has_rua: false, error: 'dns lookup failed' });
@@ -1167,6 +1169,7 @@ async function _handleApi(
           }, ctx);
         }
 
+        track(env, { event: 'spf_flatten.enable' }); // fire-and-forget
         const config = await getSpfFlattenConfig(env.DB, id);
         return json({ ok: true, config }, 201);
       }
@@ -1195,6 +1198,7 @@ async function _handleApi(
           before_value: { spf_record: config.flattened_record ?? config.canonical_record },
           after_value: { spf_record: config.canonical_record },
         }, ctx);
+        track(env, { event: 'spf_flatten.disable' }); // fire-and-forget
         await deleteSpfFlattenConfig(env.DB, id);
         return new Response(null, { status: 204 });
       }
@@ -1250,6 +1254,7 @@ async function _handleApi(
           logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.create', resource_type: 'dns_record', resource_id: result.mta_sts_record_id, resource_name: `_mta-sts.${domain.domain}`, after_value: { type: 'TXT', name: `_mta-sts.${domain.domain}`, content: `v=STSv1; id=${result.policy_id}` } }, ctx);
           logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.create', resource_type: 'dns_record', resource_id: result.tls_rpt_record_id, resource_name: `_smtp._tls.${domain.domain}`, after_value: { type: 'TXT', name: `_smtp._tls.${domain.domain}`, content: `v=TLSRPTv1; rua=mailto:tls-rpt@${rd}` } }, ctx);
           logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.create', resource_type: 'dns_record', resource_id: result.cname_record_id, resource_name: `mta-sts.${domain.domain}`, after_value: { type: 'CNAME', name: `mta-sts.${domain.domain}`, proxied: true } }, ctx);
+          track(env, { event: 'mta_sts.enable' }); // fire-and-forget
           return json({ ok: true, mode: result.mode, mx_hosts: result.mx_hosts });
         } catch (e: any) {
           return err(e.message ?? 'provisioning failed', 500);
@@ -1280,6 +1285,7 @@ async function _handleApi(
           if (config.mta_sts_record_id) {
             logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.update', resource_type: 'dns_record', resource_id: config.mta_sts_record_id, resource_name: `_mta-sts.${domain.domain}`, before_value: { content: `v=STSv1; id=${config.policy_id}` }, after_value: { content: `v=STSv1; id=${newPolicyId}` } }, ctx);
           }
+          track(env, { event: 'mta_sts.mode_change', from: config.mode, to: body.mode }); // fire-and-forget
           return json({ ok: true, mode: body.mode, policy_id: newPolicyId });
         }
 
@@ -1336,6 +1342,7 @@ async function _handleApi(
         if (config.mta_sts_record_id) logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.delete', resource_type: 'dns_record', resource_id: config.mta_sts_record_id, resource_name: `_mta-sts.${domain.domain}`, before_value: { type: 'TXT', name: `_mta-sts.${domain.domain}`, content: `v=STSv1; id=${config.policy_id}` } }, ctx);
         if (config.tls_rpt_record_id && rd) logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.delete', resource_type: 'dns_record', resource_id: config.tls_rpt_record_id, resource_name: `_smtp._tls.${domain.domain}`, before_value: { type: 'TXT', name: `_smtp._tls.${domain.domain}`, content: `v=TLSRPTv1; rua=mailto:tls-rpt@${rd}` } }, ctx);
         if (config.cname_record_id) logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.delete', resource_type: 'dns_record', resource_id: config.cname_record_id, resource_name: `mta-sts.${domain.domain}`, before_value: { type: 'CNAME', name: `mta-sts.${domain.domain}` } }, ctx);
+        track(env, { event: 'mta_sts.disable' }); // fire-and-forget
         await deleteMtaStsConfig(env.DB, id);
         return new Response(null, { status: 204 });
       }

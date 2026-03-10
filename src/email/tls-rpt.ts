@@ -56,8 +56,8 @@ function parseIsoDate(s: string): number {
 export async function handleTlsRptReport(
   message: ForwardableEmailMessage,
   env: Env,
-): Promise<void> {
-  if (!env.DB) return;
+): Promise<{ failure_count: number }> {
+  if (!env.DB) return { failure_count: 0 };
 
   // Extract JSON from email body (TLS-RPT reports are plain JSON, not attachments)
   let raw: string;
@@ -66,7 +66,7 @@ export async function handleTlsRptReport(
   } catch (e) {
     console.error('[tls-rpt] failed to extract email body:', e);
     message.setReject('Could not read TLS-RPT report email body');
-    return;
+    return { failure_count: 0 };
   }
 
   // Parse JSON — find the JSON blob (may be after headers/preamble)
@@ -80,7 +80,7 @@ export async function handleTlsRptReport(
   } catch (e) {
     console.error('[tls-rpt] JSON parse failed:', e);
     message.setReject('Invalid TLS-RPT report JSON');
-    return;
+    return { failure_count: 0 };
   }
 
   const orgName = report['organization-name'] ?? 'Unknown';
@@ -88,6 +88,7 @@ export async function handleTlsRptReport(
   const dateEnd   = parseIsoDate(report['date-range']?.['end-datetime']);
 
   let stored = 0;
+  let totalFailureCount = 0;
   for (const policy of report.policies ?? []) {
     const policyDomain = policy.policy?.['policy-domain'];
     if (!policyDomain) continue;
@@ -100,6 +101,7 @@ export async function handleTlsRptReport(
 
     const totalSuccess = policy.summary?.['total-successful-session-count'] ?? 0;
     const totalFailure = policy.summary?.['total-failure-session-count'] ?? 0;
+    totalFailureCount += totalFailure;
     const failureDetails = policy['failure-details']?.length
       ? JSON.stringify(policy['failure-details'])
       : null;
@@ -123,4 +125,5 @@ export async function handleTlsRptReport(
   }
 
   console.log(`[tls-rpt] stored ${stored} policy report(s) from ${orgName}`);
+  return { failure_count: totalFailureCount };
 }

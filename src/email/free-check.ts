@@ -40,7 +40,7 @@ export async function handleFreeCheck(
   message: ForwardableEmailMessage,
   env: Env,
   sessionToken: string,
-): Promise<void> {
+): Promise<{ result: string }> {
   const fromEmail = message.from;
   const domain = extractDomain(fromEmail);
 
@@ -83,4 +83,6 @@ export async function handleFreeCheck(
   } catch (err) {
     console.error('free-check: D1 insert failed', err);
   }
+
+  return { result: summary.status };
 }

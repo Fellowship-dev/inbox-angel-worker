@@ -111,8 +111,9 @@
 	//   0 8 * * *  — daily DNS monitor check
 	//   0 9 * * 1  — weekly DMARC digest email (Mondays 9am UTC)
 	//   0 10 * * * — daily SPF flatten refresh (re-resolves IPs for flattened domains)
+	//   0 11 * * * — daily telemetry heartbeat (opt-in anonymous usage stats)
 	"triggers": {
-		"crons": ["0 8 * * *", "0 9 * * 1", "0 10 * * *"]
+		"crons": ["0 8 * * *", "0 9 * * 1", "0 10 * * *", "0 11 * * *"]
 	},
 
 	// Environment variables — set these to your values before deploying

@@ -14,7 +14,7 @@ import { storeReport } from '../dmarc/store-report';
 export async function handleDmarcReport(
   message: ForwardableEmailMessage,
   env: Env,
-): Promise<void> {
+): Promise<{ failure_count: number }> {
   // 1. Extract attachment bytes from raw MIME stream
   let bytes: Uint8Array;
   try {
@@ -25,7 +25,7 @@ export async function handleDmarcReport(
       : 'Unexpected error reading email';
     console.error('dmarc-report: mime extraction failed', err);
     message.setReject(reason);
-    return;
+    return { failure_count: 0 };
   }
 
   // 2. Parse the DMARC XML — needed to determine which domain this report is for
@@ -49,7 +49,7 @@ export async function handleDmarcReport(
       : 'Unexpected error parsing DMARC report';
     console.error('dmarc-report: parse failed', err);
     message.setReject(reason);
-    return;
+    return { failure_count: 0 };
   }
 
   // 3. Resolve customer + domain from the policy_domain in the report
@@ -58,9 +58,11 @@ export async function handleDmarcReport(
   if (!resolved) {
     console.warn('dmarc-report: no customer found for policy_domain', policyDomain);
     message.setReject(`Unknown domain ${policyDomain} — not a registered InboxAngel inbox`);
-    return;
+    return { failure_count: 0 };
   }
   const { customer, domain } = resolved;
+
+  const failureCount = report.records.reduce((sum, r) => sum + (r.count ?? 0) * (r.policy_evaluated?.dkim === 'fail' || r.policy_evaluated?.spf === 'fail' ? 1 : 0), 0);
 
   // 4. Store in D1 (dedup handled by INSERT OR IGNORE inside storeReport)
   try {
@@ -80,4 +82,6 @@ export async function handleDmarcReport(
     // Log but don't reject — email was valid, just a storage failure
     console.error('dmarc-report: D1 storage failed for', domain.domain, err);
   }
+
+  return { failure_count: failureCount };
 }

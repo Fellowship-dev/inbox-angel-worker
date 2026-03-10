@@ -704,3 +704,53 @@ export function insertReportRecords(db: D1Database, records: Omit<ReportRecord, 
     )
   ));
 }
+
+// ── Telemetry heartbeat ───────────────────────────────────────
+
+export interface HeartbeatStats {
+  domain_count: number;
+  dns_verified_count: number;
+  spf_flatten_count: number;
+  mta_sts_testing_count: number;
+  mta_sts_enforce_count: number;
+  reports_30d: number;
+  tls_reports_30d: number;
+  team_member_count: number;
+  instance_age_days: number;
+}
+
+export async function getHeartbeatStats(db: D1Database): Promise<HeartbeatStats> {
+  const since30d = Math.floor(Date.now() / 1000) - 30 * 86400;
+  const [domains, spf, mta, reports, tls, users, age] = await db.batch([
+    db.prepare(`SELECT COUNT(*) AS n, SUM(CASE WHEN auth_record_provisioned = 1 THEN 1 ELSE 0 END) AS verified FROM domains`),
+    db.prepare(`SELECT COUNT(*) AS n FROM spf_flatten_configs WHERE enabled = 1`),
+    db.prepare(`SELECT SUM(CASE WHEN mode = 'testing' THEN 1 ELSE 0 END) AS testing, SUM(CASE WHEN mode = 'enforce' THEN 1 ELSE 0 END) AS enforce FROM mta_sts_configs WHERE enabled = 1`),
+    db.prepare(`SELECT COUNT(*) AS n FROM aggregate_reports WHERE created_at > ?`).bind(since30d),
+    db.prepare(`SELECT COUNT(*) AS n FROM tls_reports WHERE created_at > ?`).bind(since30d),
+    db.prepare(`SELECT COUNT(*) AS n FROM users`),
+    db.prepare(`SELECT MIN(created_at) AS first FROM users`),
+  ]);
+
+  const d = domains.results[0] as { n: number; verified: number } | undefined;
+  const s = spf.results[0] as { n: number } | undefined;
+  const m = mta.results[0] as { testing: number; enforce: number } | undefined;
+  const r = reports.results[0] as { n: number } | undefined;
+  const t = tls.results[0] as { n: number } | undefined;
+  const u = users.results[0] as { n: number } | undefined;
+  const a = age.results[0] as { first: number | null } | undefined;
+
+  const firstTs = a?.first ?? Math.floor(Date.now() / 1000);
+  const ageDays = Math.floor((Math.floor(Date.now() / 1000) - firstTs) / 86400);
+
+  return {
+    domain_count: d?.n ?? 0,
+    dns_verified_count: d?.verified ?? 0,
+    spf_flatten_count: s?.n ?? 0,
+    mta_sts_testing_count: m?.testing ?? 0,
+    mta_sts_enforce_count: m?.enforce ?? 0,
+    reports_30d: r?.n ?? 0,
+    tls_reports_30d: t?.n ?? 0,
+    team_member_count: u?.n ?? 0,
+    instance_age_days: ageDays,
+  };
+}
