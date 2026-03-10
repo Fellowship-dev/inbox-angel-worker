@@ -31,6 +31,7 @@ export function AuthGate({ onSave }: Props) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [pendingToken, setPendingToken] = useState('');
+  const [emailVerificationSent, setEmailVerificationSent] = useState(false);
   const turnstileRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -80,10 +81,11 @@ export function AuthGate({ onSave }: Props) {
         return;
       }
 
-      const { token } = await res.json() as { token: string };
+      const { token, email_verification_sent } = await res.json() as { token: string; email_verification_sent?: boolean };
       localStorage.setItem('ia_api_key', token);
       if (!status?.configured) {
         setPendingToken(token);
+        setEmailVerificationSent(email_verification_sent ?? false);
         setView('setup-done');
       } else {
         onSave(token);
@@ -174,22 +176,34 @@ export function AuthGate({ onSave }: Props) {
           <div style={s.logo}>🪄 InboxAngel</div>
           <div style={s.successBadge}>✓ Account created</div>
           <h1 style={s.title}>One more thing</h1>
-          <p style={s.subtitle}>
-            To receive <strong>password reset emails</strong> and <strong>monitoring alerts</strong>,
-            you need to verify your email as a destination in Cloudflare Email Routing.
-          </p>
-          <div style={s.notice}>
-            <strong>Why?</strong> InboxAngel sends emails via Cloudflare's Email Workers
-            binding (<code style={s.code}>SEND_EMAIL</code>), which can only deliver to
-            verified destination addresses — this is a Cloudflare platform requirement,
-            not something we can bypass.
-          </div>
-          <ol style={s.steps}>
-            <li>Go to <strong>Cloudflare Dashboard → your zone → Email → Routing → Destinations</strong></li>
-            <li>Click <strong>Add destination</strong> and enter <code style={s.code}>{email}</code></li>
-            <li>Check your inbox and click the verification link Cloudflare sends</li>
-          </ol>
-          <p style={s.muted}>You can skip this for now and verify later — just know you won't receive emails until it's done.</p>
+          {emailVerificationSent ? (
+            <>
+              <p style={s.subtitle}>
+                Cloudflare sent a verification email to <strong>{email}</strong>.
+                Click the link in that email to enable monitoring alerts and password reset emails.
+              </p>
+              <p style={s.muted}>You can continue to the dashboard now — just know emails won't arrive until you verify.</p>
+            </>
+          ) : (
+            <>
+              <p style={s.subtitle}>
+                To receive <strong>password reset emails</strong> and <strong>monitoring alerts</strong>,
+                you need to verify your email as a destination in Cloudflare Email Routing.
+              </p>
+              <div style={s.notice}>
+                <strong>Why?</strong> InboxAngel sends emails via Cloudflare's Email Workers
+                binding (<code style={s.code}>SEND_EMAIL</code>), which can only deliver to
+                verified destination addresses — this is a Cloudflare platform requirement,
+                not something we can bypass.
+              </div>
+              <ol style={s.steps}>
+                <li>Go to <strong>Cloudflare Dashboard → your zone → Email → Routing → Destinations</strong></li>
+                <li>Click <strong>Add destination</strong> and enter <code style={s.code}>{email}</code></li>
+                <li>Check your inbox and click the verification link Cloudflare sends</li>
+              </ol>
+              <p style={s.muted}>You can skip this for now and verify later — just know you won't receive emails until it's done.</p>
+            </>
+          )}
           <button type="button" style={s.btn} onClick={() => onSave(pendingToken)}>
             Continue to dashboard →
           </button>

@@ -37,6 +37,39 @@ interface DnsRecord {
   priority: number;
 }
 
+/**
+ * Registers an email address as a verified destination in Cloudflare Email Routing.
+ * CF sends a verification email automatically — user just clicks the link.
+ * Requires: CLOUDFLARE_API_TOKEN with "Email Routing Addresses: Write" (account scope).
+ * Returns true if the API call succeeded, false if skipped or failed (non-fatal).
+ */
+export async function registerEmailRoutingDestination(
+  token: string,
+  accountId: string,
+  email: string,
+): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/email/routing/addresses`,
+      {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      }
+    );
+    const data = await res.json() as { success: boolean; errors?: { message: string }[] };
+    if (!data.success) {
+      // "already exists" is fine — address just needs the user to verify if they haven't
+      const alreadyExists = data.errors?.some(e => e.message.toLowerCase().includes('already'));
+      if (!alreadyExists) console.warn('[setup] registerEmailRoutingDestination failed:', data.errors);
+    }
+    return true;
+  } catch (e) {
+    console.warn('[setup] registerEmailRoutingDestination error:', e);
+    return false;
+  }
+}
+
 export async function ensureEmailRouting(env: Env): Promise<void> {
   const token = env.CLOUDFLARE_API_TOKEN;
   const zoneId = getZoneId();

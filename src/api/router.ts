@@ -88,7 +88,7 @@ import {
 import { hashPassword, verifyPassword } from './password';
 import type { DnsProvisionResult } from '../dns/provision';
 import { provisionDomain, deprovisionDomain, DnsProvisionError } from '../dns/provision';
-import { ensureEmailRouting } from '../setup/email-routing';
+import { ensureEmailRouting, registerEmailRoutingDestination } from '../setup/email-routing';
 import { track } from '../telemetry';
 import { debug } from '../debug';
 import { reportsDomain, fromEmail, enrichEnv, getZoneId } from '../env-utils';
@@ -710,7 +710,14 @@ async function _handleApi(
       meta: { ip },
     }, ctx);
     track(env, { event: 'instance.born' }); // fire-and-forget
-    return json({ token }, 201);
+
+    // Register user's email as a CF Email Routing destination so they only need to click a link
+    let email_verification_sent = false;
+    if (env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ACCOUNT_ID) {
+      email_verification_sent = await registerEmailRoutingDestination(env.CLOUDFLARE_API_TOKEN, env.CLOUDFLARE_ACCOUNT_ID, email);
+    }
+
+    return json({ token, email_verification_sent }, 201);
   }
 
   // POST /api/auth/login — verify password → new session token
