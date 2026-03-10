@@ -179,10 +179,14 @@ export function AuthGate({ onSave }: Props) {
           {emailVerificationSent ? (
             <>
               <p style={s.subtitle}>
-                Cloudflare sent a verification email to <strong>{email}</strong>.
-                Click the link in that email to enable monitoring alerts and password reset emails.
+                We've asked Cloudflare to send a verification email to <strong>{email}</strong>.
               </p>
-              <p style={s.muted}>You can continue to the dashboard now — just know emails won't arrive until you verify.</p>
+              <div style={s.notice}>
+                <strong>Why?</strong> InboxAngel sends monitoring alerts and password reset emails
+                through Cloudflare Email Workers. Cloudflare requires destination addresses to be
+                verified once — this is the only step they put in your way.
+              </div>
+              <p style={s.muted}>Click the link in that email, then you're fully set up. You can continue to the dashboard in the meantime.</p>
             </>
           ) : (
             <>

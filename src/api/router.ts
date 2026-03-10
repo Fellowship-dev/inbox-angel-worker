@@ -91,7 +91,7 @@ import { provisionDomain, deprovisionDomain, DnsProvisionError } from '../dns/pr
 import { ensureEmailRouting, registerEmailRoutingDestination } from '../setup/email-routing';
 import { track } from '../telemetry';
 import { debug } from '../debug';
-import { reportsDomain, fromEmail, enrichEnv, getZoneId } from '../env-utils';
+import { reportsDomain, fromEmail, enrichEnv, getZoneId, getAccountId } from '../env-utils';
 import { logAudit } from '../audit/log';
 import { flattenSpf, restoreSpf } from '../email/spf-flattener';
 import { lookupSpf } from '../email/dns-check';
@@ -713,8 +713,9 @@ async function _handleApi(
 
     // Register user's email as a CF Email Routing destination so they only need to click a link
     let email_verification_sent = false;
-    if (env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ACCOUNT_ID) {
-      email_verification_sent = await registerEmailRoutingDestination(env.CLOUDFLARE_API_TOKEN, env.CLOUDFLARE_ACCOUNT_ID, email);
+    const accountId = env.CLOUDFLARE_ACCOUNT_ID ?? getAccountId();
+    if (env.CLOUDFLARE_API_TOKEN && accountId) {
+      email_verification_sent = await registerEmailRoutingDestination(env.CLOUDFLARE_API_TOKEN, accountId, email);
     }
 
     return json({ token, email_verification_sent }, 201);

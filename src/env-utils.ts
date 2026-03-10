@@ -10,6 +10,7 @@ export function fromEmail(env: Pick<Env, 'FROM_EMAIL' | 'BASE_DOMAIN'>): string 
 
 // Module-level cache — lives for the lifetime of the Worker instance (reused across requests)
 let _zoneIdCache: string | undefined;
+let _accountIdCache: string | undefined;
 
 /**
  * Return the cached zone ID (set by resolveZoneId / enrichEnv).
@@ -20,7 +21,16 @@ export function getZoneId(): string | undefined {
 }
 
 /**
+ * Return the cached account ID (set by resolveZoneId / enrichEnv).
+ * Auto-derived from the zones API response — no extra secret needed.
+ */
+export function getAccountId(): string | undefined {
+  return _accountIdCache;
+}
+
+/**
  * Resolve the Cloudflare zone ID via CF API using BASE_DOMAIN.
+ * Also caches account ID from the same response — no extra API call.
  * Result is cached in-process — only one API call per cold start.
  */
 export async function resolveZoneId(
@@ -34,8 +44,9 @@ export async function resolveZoneId(
       `https://api.cloudflare.com/client/v4/zones?name=${encodeURIComponent(env.BASE_DOMAIN)}`,
       { headers: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` } }
     );
-    const data = await res.json() as { result?: { id: string }[] };
+    const data = await res.json() as { result?: { id: string; account: { id: string } }[] };
     _zoneIdCache = data.result?.[0]?.id;
+    _accountIdCache = data.result?.[0]?.account?.id;
     return _zoneIdCache;
   } catch {
     return undefined;
