@@ -319,18 +319,35 @@ export async function ensureMigrated(db: D1Database): Promise<void> {
 
 	for (const m of MIGRATIONS) {
 		if (m.version > current) {
-			try {
-				await db.exec(m.sql);
-				// Only record as applied when exec actually succeeds
+			// D1 exec() does not support multi-statement SQL — split on semicolons and run each individually
+			const statements = m.sql
+				.split(';')
+				.map(s => s.trim())
+				.filter(s => s.length > 0);
+
+			let failed = false;
+			for (const stmt of statements) {
+				try {
+					await db.exec(stmt);
+				} catch (e) {
+					// "column already exists" from a prior manual migrate run — safe to continue
+					console.warn(`[migrate] migration ${m.version} statement error (column may already exist):`, e);
+					// ALTER TABLE failures are non-fatal; CREATE TABLE failures are fatal
+					if (!stmt.toUpperCase().startsWith('ALTER')) {
+						failed = true;
+						break;
+					}
+				}
+			}
+
+			if (!failed) {
 				await db
 					.prepare(`INSERT OR IGNORE INTO _migrations (version, applied_at) VALUES (?, ?)`)
 					.bind(m.version, new Date().toISOString())
 					.run();
 				console.log(`[migrate] applied migration ${m.version}`);
-			} catch (e) {
-				// Most likely "column already exists" from a prior manual migrate run — safe to continue.
-				// Do NOT record as applied so it will be retried on the next request.
-				console.warn(`[migrate] migration ${m.version} error (will retry):`, e);
+			} else {
+				console.warn(`[migrate] migration ${m.version} failed — will retry on next request`);
 			}
 		}
 	}
