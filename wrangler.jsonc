@@ -111,17 +111,12 @@
 		"WORKER_NAME": "inbox-angel-worker",  // must match the "name" field above
 		"TELEMETRY_ENABLED": "false",         // set to "true" to send anonymous usage stats
 		"DEBUG": "false",                     // set to "true" for verbose logs in CF Workers Logs
-		// Your domain — required. REPORTS_DOMAIN and FROM_EMAIL are auto-derived if not set:
-		//   REPORTS_DOMAIN → reports.<BASE_DOMAIN>
-		//   FROM_EMAIL     → noreply@reports.<BASE_DOMAIN>
-		"BASE_DOMAIN": "",                    // e.g. "yourdomain.com"
-		"CUSTOMER_EMAIL": "",                 // optional — your email, for alerts + digests
-		"CUSTOMER_NAME": "",                  // optional — display name (defaults to "Self-hosted")
-		"REPORTS_DOMAIN": "",                 // optional — override if you use a different subdomain
-		"FROM_EMAIL": ""                      // optional — override sender address
-		// Secrets (set via wrangler secret put, or via the deploy button):
-		//   CLOUDFLARE_API_TOKEN — see README for required permissions
-		//   CLOUDFLARE_ZONE_ID   — dash.cloudflare.com → your domain → Overview (sidebar)
-		//   API_KEY              — optional, for programmatic/integration access (X-Api-Key header)
+		"BASE_DOMAIN": ""                     // e.g. "yourdomain.com" — required
+		// Everything else auto-derives. Override later with: wrangler secret put <NAME>
+		//   CLOUDFLARE_API_TOKEN — required, see README for permissions
+		//   CUSTOMER_EMAIL       — optional, for alerts + digests (defaults to noreply@reports.<BASE_DOMAIN>)
+		//   CUSTOMER_NAME        — optional, display name (defaults to "Self-hosted")
+		//   REPORTS_DOMAIN       — optional, override reports subdomain (defaults to reports.<BASE_DOMAIN>)
+		//   FROM_EMAIL           — optional, override sender address
 	}
 }
