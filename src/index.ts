@@ -5,7 +5,7 @@ import { checkSubscription } from './monitor/check';
 import { sendChangeNotification } from './monitor/notify';
 import { sendWeeklyDigests } from './digest/weekly';
 import { ensureMigrated } from './db/migrate';
-import { reportsDomain, fromEmail, enrichEnv } from './env-utils';
+import { reportsDomain, fromEmail, enrichEnv, getZoneId } from './env-utils';
 import { flattenSpf } from './email/spf-flattener';
 import { lookupSpf } from './email/dns-check';
 import { discoverMxHosts, generatePolicyId, buildPolicyFile, updateMtaStsTxtRecord } from './email/mta-sts';
@@ -20,7 +20,6 @@ export interface Env {
   API_KEY?: string;             // legacy bypass key — superseded by email/password auth
   // Cloudflare (secrets — set via wrangler secret put)
   CLOUDFLARE_API_TOKEN?: string; // EMAIL token: email routing + DNS writes
-  CLOUDFLARE_ZONE_ID?: string;   // your zone ID — required for DNS provisioning
   CLOUDFLARE_ACCOUNT_ID?: string; // optional — used for anonymous telemetry ID
   // Worker config (vars in wrangler.jsonc)
   WORKER_NAME?: string;          // defaults to "inbox-angel-worker"
@@ -89,7 +88,7 @@ export default {
 
     // Daily SPF flatten refresh — every day 10am UTC
     if (event.cron === '0 10 * * *') {
-      if (env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ZONE_ID) {
+      if (env.CLOUDFLARE_API_TOKEN && getZoneId()) {
         const { results: configs } = await getAllEnabledSpfFlattenConfigs(env.DB);
         console.log(`[spf-flatten] refreshing ${configs.length} flattened domains`);
         for (const config of configs) {
@@ -98,7 +97,6 @@ export default {
           try {
             const result = await flattenSpf(domain.domain, {
               CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN,
-              CLOUDFLARE_ZONE_ID: env.CLOUDFLARE_ZONE_ID,
             }, config.cf_record_id);
             await updateSpfFlattenResult(env.DB, config.domain_id, result.flattened_record, result.ip_count, result.cf_record_id);
             console.log(`[spf-flatten] ${domain.domain}: updated (${result.ip_count} IPs)`);
@@ -126,9 +124,9 @@ export default {
     }
 
     // MTA-STS MX refresh — update policy_id in DNS if MX hosts changed
-    if (env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ZONE_ID) {
+    if (env.CLOUDFLARE_API_TOKEN && getZoneId()) {
       const { results: mtaConfigs } = await getAllEnabledMtaStsConfigs(env.DB);
-      const patchEnv = { CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN, CLOUDFLARE_ZONE_ID: env.CLOUDFLARE_ZONE_ID };
+      const patchEnv = { CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN };
       for (const cfg of mtaConfigs) {
         const domain = await getDomainById(env.DB, cfg.domain_id);
         if (!domain) continue;

@@ -10,13 +10,13 @@
 // can serve the policy file on the correct hostname over CF's Universal SSL.
 
 import { MtaStsMode } from '../db/types';
+import { getZoneId } from '../env-utils';
 
 const CF_API = 'https://api.cloudflare.com/client/v4';
 const DOH_URL = 'https://cloudflare-dns.com/dns-query';
 
 export interface MtaStsProvisionEnv {
   CLOUDFLARE_API_TOKEN: string;
-  CLOUDFLARE_ZONE_ID: string;
   REPORTS_DOMAIN: string;   // e.g. reports.yourdomain.com
   WORKER_NAME: string;      // e.g. inbox-angel-worker
 }
@@ -32,7 +32,6 @@ export interface MtaStsProvisionResult {
 
 export interface MtaStsDeprovisionEnv {
   CLOUDFLARE_API_TOKEN: string;
-  CLOUDFLARE_ZONE_ID: string;
 }
 
 // ── DNS helpers ───────────────────────────────────────────────
@@ -124,7 +123,8 @@ async function createDnsRecord(
   env: MtaStsProvisionEnv,
   record: { type: string; name: string; content: string; ttl: number; proxied?: boolean; comment?: string }
 ): Promise<string> {
-  const res = await fetch(`${CF_API}/zones/${env.CLOUDFLARE_ZONE_ID}/dns_records`, {
+  const zoneId = getZoneId();
+  const res = await fetch(`${CF_API}/zones/${zoneId}/dns_records`, {
     method: 'POST',
     headers: cfHeaders(env.CLOUDFLARE_API_TOKEN),
     body: JSON.stringify(record),
@@ -142,7 +142,8 @@ async function patchDnsRecord(
   recordId: string,
   content: string
 ): Promise<void> {
-  const res = await fetch(`${CF_API}/zones/${env.CLOUDFLARE_ZONE_ID}/dns_records/${recordId}`, {
+  const zoneId = getZoneId();
+  const res = await fetch(`${CF_API}/zones/${zoneId}/dns_records/${recordId}`, {
     method: 'PATCH',
     headers: cfHeaders(env.CLOUDFLARE_API_TOKEN),
     body: JSON.stringify({ content }),
@@ -158,7 +159,8 @@ async function deleteDnsRecord(
   env: MtaStsDeprovisionEnv,
   recordId: string
 ): Promise<void> {
-  const res = await fetch(`${CF_API}/zones/${env.CLOUDFLARE_ZONE_ID}/dns_records/${recordId}`, {
+  const zoneId = getZoneId();
+  const res = await fetch(`${CF_API}/zones/${zoneId}/dns_records/${recordId}`, {
     method: 'DELETE',
     headers: cfHeaders(env.CLOUDFLARE_API_TOKEN),
   });
@@ -169,8 +171,9 @@ async function deleteDnsRecord(
 
 // Resolve the Worker's public hostname from CF API
 async function getWorkerRoute(env: MtaStsProvisionEnv, domain: string): Promise<string> {
+  const zoneId = getZoneId();
   // Check existing routes for this zone
-  const res = await fetch(`${CF_API}/zones/${env.CLOUDFLARE_ZONE_ID}/workers/routes`, {
+  const res = await fetch(`${CF_API}/zones/${zoneId}/workers/routes`, {
     headers: cfHeaders(env.CLOUDFLARE_API_TOKEN),
   });
   if (res.ok) {

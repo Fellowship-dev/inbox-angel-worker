@@ -12,13 +12,20 @@ export function fromEmail(env: Pick<Env, 'FROM_EMAIL' | 'BASE_DOMAIN'>): string 
 let _zoneIdCache: string | undefined;
 
 /**
- * Resolve CLOUDFLARE_ZONE_ID from env, or look it up via CF API using BASE_DOMAIN.
+ * Return the cached zone ID (set by resolveZoneId / enrichEnv).
+ * Returns undefined if the cache has not been warmed yet.
+ */
+export function getZoneId(): string | undefined {
+  return _zoneIdCache;
+}
+
+/**
+ * Resolve the Cloudflare zone ID via CF API using BASE_DOMAIN.
  * Result is cached in-process — only one API call per cold start.
  */
 export async function resolveZoneId(
-  env: Pick<Env, 'CLOUDFLARE_ZONE_ID' | 'CLOUDFLARE_API_TOKEN' | 'BASE_DOMAIN'>
+  env: Pick<Env, 'CLOUDFLARE_API_TOKEN' | 'BASE_DOMAIN'>
 ): Promise<string | undefined> {
-  if (env.CLOUDFLARE_ZONE_ID) return env.CLOUDFLARE_ZONE_ID;
   if (_zoneIdCache) return _zoneIdCache;
   if (!env.CLOUDFLARE_API_TOKEN || !env.BASE_DOMAIN) return undefined;
 
@@ -36,11 +43,10 @@ export async function resolveZoneId(
 }
 
 /**
- * Return a copy of env with CLOUDFLARE_ZONE_ID resolved.
- * Call once at the top of request/cron handlers.
+ * Warm the zone ID cache. Call once at the top of request/cron handlers.
+ * Returns env unchanged — zone ID is accessed via getZoneId() after this.
  */
 export async function enrichEnv(env: Env): Promise<Env> {
-  if (env.CLOUDFLARE_ZONE_ID) return env;
-  const zoneId = await resolveZoneId(env);
-  return zoneId ? { ...env, CLOUDFLARE_ZONE_ID: zoneId } : env;
+  await resolveZoneId(env);
+  return env;
 }

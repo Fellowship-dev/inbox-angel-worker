@@ -89,7 +89,7 @@ import { provisionDomain, deprovisionDomain, DnsProvisionError } from '../dns/pr
 import { ensureEmailRouting } from '../setup/email-routing';
 import { track } from '../telemetry';
 import { debug } from '../debug';
-import { reportsDomain, fromEmail, enrichEnv } from '../env-utils';
+import { reportsDomain, fromEmail, enrichEnv, getZoneId } from '../env-utils';
 import { flattenSpf, restoreSpf } from '../email/spf-flattener';
 import { lookupSpf } from '../email/dns-check';
 import {
@@ -885,7 +885,7 @@ export async function handleApi(
       const domain = await getDomainById(env.DB, id);
       if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
 
-      const available = !!(env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ZONE_ID);
+      const available = !!(env.CLOUDFLARE_API_TOKEN && getZoneId());
 
       // GET — return current config + availability
       if (method === 'GET') {
@@ -895,11 +895,10 @@ export async function handleApi(
 
       // POST — enable + trigger initial flatten
       if (method === 'POST') {
-        if (!available) return err('Cloudflare credentials not configured (CLOUDFLARE_API_TOKEN + CLOUDFLARE_ZONE_ID required)', 422);
+        if (!available) return err('Cloudflare credentials not configured (CLOUDFLARE_API_TOKEN + BASE_DOMAIN required)', 422);
 
         const flatEnv = {
           CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN!,
-          CLOUDFLARE_ZONE_ID: env.CLOUDFLARE_ZONE_ID!,
         };
 
         // Walk lookup count first (for display)
@@ -944,7 +943,6 @@ export async function handleApi(
           try {
             await restoreSpf(domain.domain, config.cf_record_id, config.canonical_record, {
               CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN!,
-              CLOUDFLARE_ZONE_ID: env.CLOUDFLARE_ZONE_ID!,
             });
           } catch (e) {
             console.warn(`[spf-flatten] restore failed for ${domain.domain}:`, e);
@@ -969,12 +967,12 @@ export async function handleApi(
         const config = await getMtaStsConfig(env.DB, id);
         const tlsSince = Math.floor(Date.now() / 1000) - 30 * 86400; // last 30 days
         const summary = config ? await getTlsReportSummary(env.DB, id, tlsSince) : null;
-        return json({ available: !!(env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ZONE_ID), config, summary });
+        return json({ available: !!(env.CLOUDFLARE_API_TOKEN && getZoneId()), config, summary });
       }
 
       if (method === 'POST') {
         // Enable MTA-STS
-        if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ZONE_ID || !env.REPORTS_DOMAIN) {
+        if (!env.CLOUDFLARE_API_TOKEN || !getZoneId() || !env.REPORTS_DOMAIN) {
           return err('Cloudflare credentials not configured', 400);
         }
         const existing = await getMtaStsConfig(env.DB, id);
@@ -983,7 +981,6 @@ export async function handleApi(
         try {
           const result = await provisionMtaSts(domain.domain, {
             CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN,
-            CLOUDFLARE_ZONE_ID: env.CLOUDFLARE_ZONE_ID,
             REPORTS_DOMAIN: reportsDomain(env)!,
             WORKER_NAME: env.WORKER_NAME ?? 'inbox-angel-worker',
           });
@@ -1006,10 +1003,10 @@ export async function handleApi(
         // Update mode (testing → enforce) or refresh MX hosts
         const config = await getMtaStsConfig(env.DB, id);
         if (!config?.enabled) return err('MTA-STS not enabled for this domain', 404);
-        if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ZONE_ID) return err('Cloudflare credentials not configured', 400);
+        if (!env.CLOUDFLARE_API_TOKEN || !getZoneId()) return err('Cloudflare credentials not configured', 400);
 
         const body = await parseBody<{ mode?: string; refresh_mx?: boolean }>(request);
-        const patchEnv = { CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN, CLOUDFLARE_ZONE_ID: env.CLOUDFLARE_ZONE_ID };
+        const patchEnv = { CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN };
 
         if (body.mode && (body.mode === 'testing' || body.mode === 'enforce')) {
           const newPolicyId = generatePolicyId();
@@ -1035,10 +1032,10 @@ export async function handleApi(
         const config = await getMtaStsConfig(env.DB, id);
         if (!config) return new Response(null, { status: 204 });
 
-        if (env.CLOUDFLARE_API_TOKEN && env.CLOUDFLARE_ZONE_ID) {
+        if (env.CLOUDFLARE_API_TOKEN && getZoneId()) {
           try {
             await deprovisionMtaSts(
-              { CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN, CLOUDFLARE_ZONE_ID: env.CLOUDFLARE_ZONE_ID },
+              { CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN },
               {
                 mta_sts_record_id: config.mta_sts_record_id ?? null,
                 tls_rpt_record_id: config.tls_rpt_record_id ?? null,

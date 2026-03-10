@@ -8,6 +8,8 @@
 // Supported: include:, redirect=, ip4:, ip6: (covers 99% of cloud mail provider SPF records)
 // Out of scope (MVP): a:, mx:, ptr:, exists: — preserved verbatim if present (rare)
 
+import { getZoneId } from '../env-utils';
+
 const CF_API = 'https://api.cloudflare.com/client/v4';
 const DOH_URL = 'https://cloudflare-dns.com/dns-query';
 
@@ -20,7 +22,6 @@ export interface SpfFlattenResult {
 
 export interface FlattenEnv {
   CLOUDFLARE_API_TOKEN: string;
-  CLOUDFLARE_ZONE_ID: string;
 }
 
 // ── DNS helpers ───────────────────────────────────────────────
@@ -130,7 +131,7 @@ export async function findSpfRecord(
   domain: string,
   env: FlattenEnv,
 ): Promise<CfDnsRecord | null> {
-  const url = `${CF_API}/zones/${env.CLOUDFLARE_ZONE_ID}/dns_records?type=TXT&name=${encodeURIComponent(domain)}&per_page=100`;
+  const url = `${CF_API}/zones/${getZoneId()}/dns_records?type=TXT&name=${encodeURIComponent(domain)}&per_page=100`;
   const res = await fetch(url, { headers: cfHeaders(env.CLOUDFLARE_API_TOKEN) });
   if (!res.ok) return null;
   const data = await res.json() as { success: boolean; result?: CfDnsRecord[] };
@@ -146,7 +147,7 @@ export async function updateDnsRecord(
   env: FlattenEnv,
 ): Promise<void> {
   const res = await fetch(
-    `${CF_API}/zones/${env.CLOUDFLARE_ZONE_ID}/dns_records/${recordId}`,
+    `${CF_API}/zones/${getZoneId()}/dns_records/${recordId}`,
     {
       method: 'PATCH',
       headers: cfHeaders(env.CLOUDFLARE_API_TOKEN),

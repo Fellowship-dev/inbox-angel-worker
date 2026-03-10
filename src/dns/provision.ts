@@ -12,6 +12,8 @@
 // We manage this record via Cloudflare DNS API. The CF record ID is stored in
 // domains.dns_record_id so we can delete it when the customer removes the domain.
 
+import { getZoneId } from '../env-utils';
+
 const CF_API = 'https://api.cloudflare.com/client/v4';
 
 export class DnsProvisionError extends Error {
@@ -32,13 +34,11 @@ export interface DnsProvisionResult {
 
 interface ProvisionEnv {
   CLOUDFLARE_API_TOKEN: string;
-  CLOUDFLARE_ZONE_ID: string;
   REPORTS_DOMAIN: string;  // e.g. "reports.inboxangel.io"
 }
 
 interface DeprovisionEnv {
   CLOUDFLARE_API_TOKEN: string;
-  CLOUDFLARE_ZONE_ID: string;
 }
 
 function cfHeaders(token: string): Record<string, string> {
@@ -58,8 +58,9 @@ export async function provisionDomain(
 ): Promise<DnsProvisionResult> {
   // RFC 7489 §7.1 cross-domain authorization record name
   const recordName = `${customerDomain}._report._dmarc.${env.REPORTS_DOMAIN}`;
+  const zoneId = getZoneId();
 
-  if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ZONE_ID) {
+  if (!env.CLOUDFLARE_API_TOKEN || !zoneId) {
     // Manual mode — caller must add the DNS record themselves
     return { recordId: null, recordName, manual: true };
   }
@@ -74,7 +75,7 @@ export async function provisionDomain(
 
   let res: Response;
   try {
-    res = await fetch(`${CF_API}/zones/${env.CLOUDFLARE_ZONE_ID}/dns_records`, {
+    res = await fetch(`${CF_API}/zones/${zoneId}/dns_records`, {
       method: 'POST',
       headers: cfHeaders(env.CLOUDFLARE_API_TOKEN),
       body: JSON.stringify(body),
@@ -101,14 +102,16 @@ export async function deprovisionDomain(
   env: DeprovisionEnv,
   recordId: string,
 ): Promise<void> {
-  if (!env.CLOUDFLARE_API_TOKEN || !env.CLOUDFLARE_ZONE_ID) {
+  const zoneId = getZoneId();
+
+  if (!env.CLOUDFLARE_API_TOKEN || !zoneId) {
     // If CF creds aren't configured, there's nothing to clean up
     return;
   }
 
   let res: Response;
   try {
-    res = await fetch(`${CF_API}/zones/${env.CLOUDFLARE_ZONE_ID}/dns_records/${recordId}`, {
+    res = await fetch(`${CF_API}/zones/${zoneId}/dns_records/${recordId}`, {
       method: 'DELETE',
       headers: cfHeaders(env.CLOUDFLARE_API_TOKEN),
     });

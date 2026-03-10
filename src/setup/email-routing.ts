@@ -7,9 +7,10 @@
 //   3. Clones apex MX records to REPORTS_DOMAIN subdomain
 //   4. Sets catch-all rule: *@REPORTS_DOMAIN → this Worker
 //
-// Requires: CLOUDFLARE_API_TOKEN (DNS:Edit + Email Routing Rules:Edit), CLOUDFLARE_ZONE_ID
+// Requires: CLOUDFLARE_API_TOKEN (DNS:Edit + Email Routing Rules:Edit)
 
 import type { Env } from '../index';
+import { getZoneId } from '../env-utils';
 
 type CfResult<T> = { success: boolean; result: T; errors: { message: string }[] };
 
@@ -38,7 +39,7 @@ interface DnsRecord {
 
 export async function ensureEmailRouting(env: Env): Promise<void> {
   const token = env.CLOUDFLARE_API_TOKEN;
-  const zoneId = env.CLOUDFLARE_ZONE_ID;
+  const zoneId = getZoneId();
   const domain = env.REPORTS_DOMAIN;
   const workerName = env.WORKER_NAME ?? 'inbox-angel-worker';
 
