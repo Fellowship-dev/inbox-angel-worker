@@ -361,10 +361,49 @@ async function ensureCustomerExists(env: Env, _customerId: string): Promise<void
           body: JSON.stringify({ environment: 'production', hostname, service: workerName, zone_id: getZoneId() }),
         });
         console.log(`[init] Custom domain registered: ${hostname}`);
+
+        // Provision Turnstile widget for the login form (non-fatal)
+        try {
+          const existing = await getSetting(env.DB, 'turnstile_site_key');
+          if (!existing) {
+            const tsRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/challenges/widgets`, {
+              method: 'POST',
+              headers: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`, 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                name: 'InboxAngel login',
+                domains: [hostname],
+                mode: 'managed',
+                bot_fight_mode: false,
+              }),
+            });
+            const tsData = await tsRes.json() as { result?: { sitekey: string; secret: string } };
+            if (tsData.result?.sitekey && tsData.result?.secret) {
+              await setSetting(env.DB, 'turnstile_site_key', tsData.result.sitekey);
+              await setSetting(env.DB, 'turnstile_secret_key', tsData.result.secret);
+              console.log('[init] Turnstile widget provisioned');
+            }
+          }
+        } catch (e) {
+          console.warn('[init] Turnstile provisioning failed (non-fatal):', e);
+        }
       }
     } catch (e) {
       console.warn('[init] Custom domain provisioning failed (non-fatal):', e);
     }
+  }
+}
+
+async function verifyTurnstile(token: string, secret: string, ip: string): Promise<boolean> {
+  try {
+    const res = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ secret, response: token, remoteip: ip }),
+    });
+    const data = await res.json() as { success: boolean };
+    return data.success;
+  } catch {
+    return false;
   }
 }
 
@@ -550,10 +589,12 @@ export async function handleApi(
   // GET /api/auth/status — any admin configured? + env prefill
   if (path === '/api/auth/status' && method === 'GET') {
     const admin = await env.DB!.prepare(`SELECT id FROM users WHERE role = 'admin' LIMIT 1`).first();
+    const tsKeyRow = await getSetting(env.DB!, 'turnstile_site_key');
     return json({
       configured: !!admin,
       prefill: { name: '', email: '' },
       telemetry_default: env.TELEMETRY_ENABLED === 'true',
+      turnstile_site_key: tsKeyRow?.value ?? null,
     });
   }
 
@@ -562,10 +603,19 @@ export async function handleApi(
     const admin = await env.DB!.prepare(`SELECT id FROM users WHERE role = 'admin' LIMIT 1`).first();
     if (admin) return err('already configured — use /api/auth/login', 409);
 
-    const body = await parseBody<{ name?: string; email?: string; password?: string; telemetry?: boolean }>(request);
+    const body = await parseBody<{ name?: string; email?: string; password?: string; telemetry?: boolean; cf_turnstile_token?: string }>(request);
     if (!body.email || !body.password) return err('email and password are required', 400);
     if (body.password.length < 8) return err('password must be at least 8 characters', 400);
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(body.email)) return err('invalid email', 400);
+
+    const tsSecretRow = await getSetting(env.DB!, 'turnstile_secret_key');
+    if (tsSecretRow?.value) {
+      const tsToken = body.cf_turnstile_token;
+      if (!tsToken) return err('Bot check failed', 403);
+      const ip = request.headers.get('CF-Connecting-IP') ?? '';
+      const valid = await verifyTurnstile(tsToken, tsSecretRow.value, ip);
+      if (!valid) return err('Bot check failed', 403);
+    }
 
     const hash = await hashPassword(body.password);
     const token = crypto.randomUUID();
@@ -581,8 +631,17 @@ export async function handleApi(
 
   // POST /api/auth/login — verify password → new session token
   if (path === '/api/auth/login' && method === 'POST') {
-    const body = await parseBody<{ email?: string; password?: string }>(request);
+    const body = await parseBody<{ email?: string; password?: string; cf_turnstile_token?: string }>(request);
     if (!body.email || !body.password) return err('email and password are required', 400);
+
+    const tsSecretRow = await getSetting(env.DB!, 'turnstile_secret_key');
+    if (tsSecretRow?.value) {
+      const tsToken = body.cf_turnstile_token;
+      if (!tsToken) return err('Bot check failed', 403);
+      const ip = request.headers.get('CF-Connecting-IP') ?? '';
+      const valid = await verifyTurnstile(tsToken, tsSecretRow.value, ip);
+      if (!valid) return err('Bot check failed', 403);
+    }
 
     const user = await getUserByEmail(env.DB!, body.email.toLowerCase().trim());
     if (!user || !user.password_hash) return err('invalid credentials', 401);

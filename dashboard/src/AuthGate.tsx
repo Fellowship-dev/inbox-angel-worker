@@ -1,13 +1,23 @@
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 
 interface AuthStatus {
   configured: boolean;
   prefill: { name: string; email: string };
   telemetry_default: boolean;
+  turnstile_site_key: string | null;
 }
 
 interface Props {
   onSave: (token: string) => void;
+}
+
+function loadTurnstileScript() {
+  if (document.querySelector('script[data-cf-turnstile]')) return;
+  const s = document.createElement('script');
+  s.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js';
+  s.async = true;
+  s.setAttribute('data-cf-turnstile', '1');
+  document.head.appendChild(s);
 }
 
 export function AuthGate({ onSave }: Props) {
@@ -21,6 +31,7 @@ export function AuthGate({ onSave }: Props) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [pendingToken, setPendingToken] = useState('');
+  const turnstileRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetch('/api/auth/status')
@@ -30,8 +41,9 @@ export function AuthGate({ onSave }: Props) {
         setName(s.prefill.name);
         setEmail(s.prefill.email);
         setTelemetry(s.telemetry_default);
+        if (s.turnstile_site_key) loadTurnstileScript();
       })
-      .catch(() => setStatus({ configured: false, prefill: { name: '', email: '' }, telemetry_default: false }));
+      .catch(() => setStatus({ configured: false, prefill: { name: '', email: '' }, telemetry_default: false, turnstile_site_key: null }));
   }, []);
 
   const submit = async (e: Event) => {
@@ -46,9 +58,15 @@ export function AuthGate({ onSave }: Props) {
     setLoading(true);
     try {
       const endpoint = status?.configured ? '/api/auth/login' : '/api/auth/setup';
+
+      // Collect Turnstile token if widget is present
+      const cf_turnstile_token = status?.turnstile_site_key
+        ? (document.querySelector('input[name="cf-turnstile-response"]') as HTMLInputElement | null)?.value ?? undefined
+        : undefined;
+
       const body = status?.configured
-        ? { email, password }
-        : { name, email, password, telemetry };
+        ? { email, password, ...(cf_turnstile_token ? { cf_turnstile_token } : {}) }
+        : { name, email, password, telemetry, ...(cf_turnstile_token ? { cf_turnstile_token } : {}) };
 
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -264,6 +282,15 @@ export function AuthGate({ onSave }: Props) {
               </span>
             </span>
           </label>
+        )}
+
+        {status?.turnstile_site_key && (
+          <div
+            ref={turnstileRef}
+            class="cf-turnstile"
+            data-sitekey={status.turnstile_site_key}
+            data-theme="light"
+          />
         )}
 
         {error && <p style={s.error}>{error}</p>}
