@@ -617,6 +617,75 @@ export function getTlsReportSummary(db: D1Database, domainId: number, since: num
   `).bind(domainId, since).first<{ total_success: number; total_failure: number; report_count: number }>();
 }
 
+// ── Audit Log ─────────────────────────────────────────────────
+
+export interface AuditLogRow {
+  id: number;
+  customer_id: string;
+  actor_id: string | null;
+  actor_email: string | null;
+  actor_type: 'user' | 'system';
+  action: string;
+  resource_type: string | null;
+  resource_id: string | null;
+  resource_name: string | null;
+  before_value: string | null;  // JSON string
+  after_value: string | null;   // JSON string
+  meta: string | null;          // JSON string
+  created_at: number;
+}
+
+export function getAuditLog(
+  db: D1Database,
+  customerId: string,
+  opts: {
+    page?: number;
+    limit?: number;
+    action?: string;
+    domain_id?: string;
+    actor_id?: string;
+    since?: number;
+    until?: number;
+  } = {},
+) {
+  const { page = 1, limit = 50, action, domain_id, actor_id, since, until } = opts;
+  const safeLimit = Math.min(limit, 200);
+  const offset = (page - 1) * safeLimit;
+
+  const conditions: string[] = ['customer_id = ?'];
+  const params: (string | number)[] = [customerId];
+
+  if (action) {
+    conditions.push('action LIKE ?');
+    params.push(action.replace(/%/g, '') + '%');
+  }
+  if (domain_id) {
+    conditions.push("(resource_id = ? AND resource_type = 'domain')");
+    params.push(domain_id);
+  }
+  if (actor_id) {
+    conditions.push('actor_id = ?');
+    params.push(actor_id);
+  }
+  if (since) {
+    conditions.push('created_at >= ?');
+    params.push(since);
+  }
+  if (until) {
+    conditions.push('created_at <= ?');
+    params.push(until);
+  }
+
+  params.push(safeLimit, offset);
+
+  return db
+    .prepare(
+      `SELECT * FROM audit_log WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+    )
+    .bind(...params)
+    .all<AuditLogRow>();
+}
+
 // ── Report Records ───────────────────────────────────────────
 
 export function insertReportRecords(db: D1Database, records: Omit<ReportRecord, 'id' | 'created_at'>[]) {

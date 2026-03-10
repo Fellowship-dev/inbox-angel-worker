@@ -136,6 +136,22 @@ export interface MtaStsStatus {
   summary: TlsReportSummary | null;
 }
 
+export interface AuditLogEntry {
+  id: number;
+  customer_id: string;
+  actor_id: string | null;
+  actor_email: string | null;
+  actor_type: 'user' | 'system';
+  action: string;
+  resource_type: string | null;
+  resource_id: string | null;
+  resource_name: string | null;
+  before_value: string | null;  // JSON string
+  after_value: string | null;   // JSON string
+  meta: string | null;          // JSON string
+  created_at: number;           // unix timestamp
+}
+
 export interface DayReport {
   date: string;
   domain: string;

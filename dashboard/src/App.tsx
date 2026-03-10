@@ -10,6 +10,7 @@ import { Anomalies } from './pages/Anomalies';
 import { ReportBrowser } from './pages/ReportBrowser';
 import { EmailCheck } from './pages/EmailCheck';
 import { Team } from './pages/Team';
+import { AuditLog } from './pages/AuditLog';
 import { AcceptInvite } from './pages/AcceptInvite';
 import { ResetPassword } from './pages/ResetPassword';
 import { AuthGate } from './AuthGate';
@@ -49,9 +50,10 @@ function getRoute(): string {
   return window.location.hash.replace(/^#/, '') || '/';
 }
 
-function navActive(route: string, section: 'domains' | 'check' | 'team'): boolean {
+function navActive(route: string, section: 'domains' | 'check' | 'team' | 'audit'): boolean {
   if (section === 'check') return route === '/check';
-  if (section === 'team') return route === '/team';
+  if (section === 'team')  return route === '/team';
+  if (section === 'audit') return route === '/audit';
   return route === '/' || route === '/add' || route.startsWith('/domains/');
 }
 
@@ -100,6 +102,9 @@ export function App() {
           <a href="#/team" style={{ ...styles.navLink, ...(navActive(route, 'team') ? styles.navLinkActive : {}) }}>
             Team
           </a>
+          <a href="#/audit" style={{ ...styles.navLink, ...(navActive(route, 'audit') ? styles.navLinkActive : {}) }}>
+            {mobile ? 'Log' : 'Audit log'}
+          </a>
           <button
             onClick={async () => { await logout(); setHasKey(false); }}
             style={styles.logoutBtn}
@@ -118,7 +123,8 @@ export function App() {
         {route === '/' && <Overview onUnauthorized={handleUnauth} />}
         {route === '/add' && <AddDomain onUnauthorized={handleUnauth} />}
         {route === '/check' && <EmailCheck />}
-        {route === '/team' && <Team onUnauthorized={handleUnauth} />}
+        {route === '/team'  && <Team onUnauthorized={handleUnauth} />}
+        {route === '/audit' && <AuditLog onUnauthorized={handleUnauth} />}
         {/^\/domains\/(\d+)$/.test(route) && !/\/settings$/.test(route) && (
           <DomainDetail id={parseInt(route.split('/')[2], 10)} onUnauthorized={handleUnauth} />
         )}
@@ -138,7 +144,7 @@ export function App() {
           const m = route.match(/^\/domains\/(\d+)\/reports\/(\d{4}-\d{2}-\d{2})$/);
           return m ? <ReportDetail domainId={parseInt(m[1], 10)} date={m[2]} onUnauthorized={handleUnauth} /> : null;
         })()}
-        {route !== '/' && route !== '/add' && route !== '/check' && route !== '/team' &&
+        {route !== '/' && route !== '/add' && route !== '/check' && route !== '/team' && route !== '/audit' &&
          !/^\/domains\/\d+$/.test(route) &&
          !/^\/domains\/\d+\/settings$/.test(route) &&
          !/^\/domains\/\d+\/explore$/.test(route) &&

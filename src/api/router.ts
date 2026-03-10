@@ -17,7 +17,6 @@
 //   GET  /api/invites/:token                  — invite info
 //   POST /api/invites/:token/accept           — accept invite + create user
 //   GET  /api/init-key                        — auto-generated API key (no API_KEY set)
-//   GET  /api/domains/:id/export?key=         — CSV export (query-param auth)
 //
 // Authenticated:
 //   GET    /api/domains                       — list domains
@@ -28,7 +27,9 @@
 //   GET    /api/domains/:id/sources           — top failing sources (days, max 90)
 //   GET    /api/domains/:id/explore           — all sources with pass/fail (days, max 90)
 //   GET    /api/domains/:id/anomalies         — failing sources with Active/Older split
+//   GET    /api/domains/:id/export            — CSV export
 //   GET    /api/domains/:id/dns-check         — check _dmarc TXT record in DNS
+//   GET    /api/audit-log                     — immutable audit log (admin only)
 //   GET    /api/domains/:id/spf-flatten       — SPF flatten config + availability
 //   POST   /api/domains/:id/spf-flatten       — enable SPF flattening (triggers initial flatten)
 //   DELETE /api/domains/:id/spf-flatten       — disable + restore canonical record
@@ -90,6 +91,7 @@ import { ensureEmailRouting } from '../setup/email-routing';
 import { track } from '../telemetry';
 import { debug } from '../debug';
 import { reportsDomain, fromEmail, enrichEnv, getZoneId } from '../env-utils';
+import { logAudit } from '../audit/log';
 import { flattenSpf, restoreSpf } from '../email/spf-flattener';
 import { lookupSpf } from '../email/dns-check';
 import {
@@ -112,9 +114,24 @@ import {
   updateMtaStsMxHosts,
   deleteMtaStsConfig,
   getTlsReportSummary,
+  getAuditLog,
 } from '../db/queries';
 
 // ── Helpers ───────────────────────────────────────────────────
+
+const SECURITY_HEADERS: Record<string, string> = {
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Referrer-Policy': 'strict-origin-when-cross-origin',
+  'Permissions-Policy': 'geolocation=(), camera=(), microphone=()',
+  'Strict-Transport-Security': 'max-age=63072000; includeSubDomains',
+};
+
+function withSecurityHeaders(response: Response): Response {
+  const headers = new Headers(response.headers);
+  for (const [k, v] of Object.entries(SECURITY_HEADERS)) headers.set(k, v);
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
 
 function json(data: unknown, status = 200): Response {
   return Response.json(data, {
@@ -142,7 +159,7 @@ async function getDomains(env: Env, customerId: string): Promise<Response> {
   return json({ domains: results });
 }
 
-async function addDomain(request: Request, env: Env, customerId: string, userEmail?: string, ctx?: ExecutionContext): Promise<Response> {
+async function addDomain(request: Request, env: Env, customerId: string, userEmail?: string, ctx?: ExecutionContext, actorId?: string): Promise<Response> {
   const body = await parseBody<{ domain?: string }>(request);
   if (!body.domain || typeof body.domain !== 'string') {
     return err('domain is required', 400);
@@ -206,6 +223,24 @@ async function addDomain(request: Request, env: Env, customerId: string, userEma
 
   track(env, 'domain.add'); // fire-and-forget, non-blocking
 
+  logAudit(env.DB!, {
+    customer_id: customerId,
+    actor_id: actorId ?? null, actor_email: userEmail ?? null, actor_type: 'user',
+    action: 'domain.add',
+    resource_type: 'domain', resource_id: String(domainId), resource_name: domain,
+    after_value: { domain, rua_address: ruaAddress },
+  }, ctx);
+
+  if (!provision.manual && provision.recordId) {
+    logAudit(env.DB!, {
+      customer_id: customerId,
+      actor_id: actorId ?? null, actor_email: userEmail ?? null, actor_type: 'user',
+      action: 'dns.create',
+      resource_type: 'dns_record', resource_id: provision.recordId, resource_name: provision.recordName,
+      after_value: { type: 'TXT', name: provision.recordName, content: 'v=DMARC1;', ttl: 3600 },
+    }, ctx);
+  }
+
   // Auto-subscribe the adding user to monitoring alerts
   const email = userEmail;
   if (email) {
@@ -248,7 +283,7 @@ async function addDomain(request: Request, env: Env, customerId: string, userEma
   return json(response, 201);
 }
 
-async function deleteDomain(env: Env, customerId: string, domainId: string): Promise<Response> {
+async function deleteDomain(env: Env, customerId: string, domainId: string, actor?: { id?: string; email?: string }, ctx?: ExecutionContext): Promise<Response> {
   const id = parseInt(domainId, 10);
   if (isNaN(id)) return err('invalid domain id', 400);
 
@@ -260,8 +295,25 @@ async function deleteDomain(env: Env, customerId: string, domainId: string): Pro
     .bind(id, customerId)
     .run();
 
+  logAudit(env.DB!, {
+    customer_id: customerId,
+    actor_id: actor?.id ?? null, actor_email: actor?.email ?? null, actor_type: 'user',
+    action: 'domain.remove',
+    resource_type: 'domain', resource_id: String(id), resource_name: domain.domain,
+    before_value: { domain: domain.domain, rua_address: domain.rua_address },
+  }, ctx);
+
   // Best-effort cleanup of the CF DNS record (non-fatal if it fails)
   if (domain.dns_record_id) {
+    const rdomain = reportsDomain(env);
+    const recordName = rdomain ? `${domain.domain}._report._dmarc.${rdomain}` : domain.dns_record_id;
+    logAudit(env.DB!, {
+      customer_id: customerId,
+      actor_id: actor?.id ?? null, actor_email: actor?.email ?? null, actor_type: 'user',
+      action: 'dns.delete',
+      resource_type: 'dns_record', resource_id: domain.dns_record_id, resource_name: recordName,
+      before_value: { type: 'TXT', name: recordName, content: 'v=DMARC1;', ttl: 3600 },
+    }, ctx);
     await deprovisionDomain(env, domain.dns_record_id).catch(e =>
       console.warn(`deprovisionDomain failed for domain ${id}:`, e)
     );
@@ -505,10 +557,26 @@ export async function handleApi(
   envRaw: Env,
   ctx: ExecutionContext,
 ): Promise<Response> {
+  const res = await _handleApi(request, envRaw, ctx);
+  return withSecurityHeaders(res);
+}
+
+async function _handleApi(
+  request: Request,
+  envRaw: Env,
+  ctx: ExecutionContext,
+): Promise<Response> {
   const env = await enrichEnv(envRaw);
   const url = new URL(request.url);
   const method = request.method.toUpperCase();
   const path = url.pathname;
+
+  // Global rate limit — 200 req/min per IP (covers all routes including unauthenticated)
+  if (env.API_LIMITER) {
+    const ip = request.headers.get('cf-connecting-ip') ?? request.headers.get('x-forwarded-for') ?? 'unknown';
+    const { success } = await env.API_LIMITER.limit({ key: ip });
+    if (!success) return err('too many requests', 429);
+  }
 
   // Unauthenticated routes
   if (path === '/health' && method === 'GET') {
@@ -600,6 +668,11 @@ export async function handleApi(
 
   // POST /api/auth/setup — first-time admin creation (only if no users exist)
   if (path === '/api/auth/setup' && method === 'POST') {
+    const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+    if (env.AUTH_LIMITER) {
+      const { success } = await env.AUTH_LIMITER.limit({ key: ip });
+      if (!success) return err('Too many requests — try again later', 429);
+    }
     const admin = await env.DB!.prepare(`SELECT id FROM users WHERE role = 'admin' LIMIT 1`).first();
     if (admin) return err('already configured — use /api/auth/login', 409);
 
@@ -626,11 +699,24 @@ export async function handleApi(
     await setUserSession(env.DB!, id, token);
     if (body.telemetry !== undefined) await setSetting(env.DB!, 'telemetry_opted_in', body.telemetry ? 'true' : 'false');
 
+    logAudit(env.DB!, {
+      customer_id: env.BASE_DOMAIN ?? 'system',
+      actor_id: id, actor_email: email, actor_type: 'user',
+      action: 'auth.setup',
+      resource_type: 'user', resource_id: id, resource_name: email,
+      after_value: { email, role: 'admin' },
+      meta: { ip },
+    }, ctx);
     return json({ token }, 201);
   }
 
   // POST /api/auth/login — verify password → new session token
   if (path === '/api/auth/login' && method === 'POST') {
+    const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+    if (env.AUTH_LIMITER) {
+      const { success } = await env.AUTH_LIMITER.limit({ key: ip });
+      if (!success) return err('Too many requests — try again later', 429);
+    }
     const body = await parseBody<{ email?: string; password?: string; cf_turnstile_token?: string }>(request);
     if (!body.email || !body.password) return err('email and password are required', 400);
 
@@ -651,6 +737,13 @@ export async function handleApi(
 
     const token = crypto.randomUUID();
     await setUserSession(env.DB!, user.id, token);
+    logAudit(env.DB!, {
+      customer_id: env.BASE_DOMAIN ?? 'system',
+      actor_id: user.id, actor_email: user.email, actor_type: 'user',
+      action: 'auth.login',
+      resource_type: 'user', resource_id: user.id, resource_name: user.email,
+      meta: { ip: request.headers.get('CF-Connecting-IP') ?? 'unknown' },
+    }, ctx);
     return json({ token });
   }
 
@@ -658,7 +751,15 @@ export async function handleApi(
   if (path === '/api/auth/logout' && method === 'POST') {
     const key = request.headers.get('x-api-key') ?? '';
     const user = await getUserBySession(env.DB!, key);
-    if (user) await setUserSession(env.DB!, user.id, null);
+    if (user) {
+      await setUserSession(env.DB!, user.id, null);
+      logAudit(env.DB!, {
+        customer_id: env.BASE_DOMAIN ?? 'system',
+        actor_id: user.id, actor_email: user.email, actor_type: 'user',
+        action: 'auth.logout',
+        resource_type: 'user', resource_id: user.id, resource_name: user.email,
+      }, ctx);
+    }
     return json({ ok: true });
   }
 
@@ -673,6 +774,13 @@ export async function handleApi(
       const token = crypto.randomUUID();
       const expiresAt = Math.floor(Date.now() / 1000) + 3600; // 1 hour
       await insertPasswordResetToken(env.DB!, token, user.id, expiresAt);
+      logAudit(env.DB!, {
+        customer_id: env.BASE_DOMAIN ?? 'system',
+        actor_id: user.id, actor_email: user.email, actor_type: 'user',
+        action: 'auth.password_reset',
+        resource_type: 'user', resource_id: user.id, resource_name: user.email,
+        meta: { phase: 'requested' },
+      }, ctx);
 
       const origin = new URL(request.url).origin;
       const resetUrl = `${origin}/#/reset/${token}`;
@@ -713,7 +821,13 @@ export async function handleApi(
     await env.DB!.prepare(`UPDATE users SET password_hash = ? WHERE id = ?`).bind(hash, resetToken.user_id).run();
     await setUserSession(env.DB!, resetToken.user_id, sessionToken);
     await markResetTokenUsed(env.DB!, body.token);
-
+    logAudit(env.DB!, {
+      customer_id: env.BASE_DOMAIN ?? 'system',
+      actor_id: resetToken.user_id, actor_type: 'user',
+      action: 'auth.password_reset',
+      resource_type: 'user', resource_id: resetToken.user_id,
+      meta: { phase: 'completed' },
+    }, ctx);
     return json({ token: sessionToken });
   }
 
@@ -747,7 +861,13 @@ export async function handleApi(
     await insertUser(env.DB!, { id, email: invite.email, name: body.name.trim(), password_hash: hash, role: invite.role as 'admin' | 'member' });
     await setUserSession(env.DB!, id, token);
     await markInviteUsed(env.DB!, invite.token);
-
+    logAudit(env.DB!, {
+      customer_id: env.BASE_DOMAIN ?? 'system',
+      actor_id: id, actor_email: invite.email, actor_type: 'user',
+      action: 'auth.invite_accepted',
+      resource_type: 'user', resource_id: id, resource_name: invite.email,
+      after_value: { email: invite.email, role: invite.role, invited_by: invite.invited_by },
+    }, ctx);
     return json({ token }, 201);
   }
 
@@ -758,15 +878,6 @@ export async function handleApi(
     const row = await getSetting(env.DB!, 'auto_api_key');
     if (!row) return err('not found', 404);
     return json({ key: row.value });
-  }
-
-  // GET /api/domains/:id/export — query-param auth for download links
-  const exportMatch = path.match(/^\/api\/domains\/([^/]+)\/export$/);
-  if (exportMatch && method === 'GET') {
-    const key = url.searchParams.get('key');
-    const effectiveKey = env.API_KEY ?? (await getSetting(env.DB!, 'auto_api_key'))?.value;
-    if (!key || !effectiveKey || key !== effectiveKey) return err('unauthorized', 401);
-    return await exportDomainData(env, key, exportMatch[1]);
   }
 
   // All /api/* routes require auth
@@ -812,7 +923,7 @@ export async function handleApi(
     // POST /api/domains
     if (path === '/api/domains' && method === 'POST') {
       const userEmail = userBySession?.email;
-      return await addDomain(request, env, customerId, userEmail, ctx);
+      return await addDomain(request, env, customerId, userEmail, ctx, userBySession?.id);
     }
     // GET /api/domains/:id/stats
     const domainStatsMatch = path.match(/^\/api\/domains\/([^/]+)\/stats$/);
@@ -855,6 +966,11 @@ export async function handleApi(
       const { results } = await getAnomalySources(env.DB, id, since);
       return json({ days, domain: domain.domain, anomalies: results });
     }
+    // GET /api/domains/:id/export — CSV download (requires normal session/API key auth)
+    const exportMatch = path.match(/^\/api\/domains\/([^/]+)\/export$/);
+    if (exportMatch && method === 'GET') {
+      return await exportDomainData(env, customerId, exportMatch[1]);
+    }
     // GET /api/domains/:id/dns-check — check if user has added the _dmarc TXT record
     const dnsCheckMatch = path.match(/^\/api\/domains\/([^/]+)\/dns-check$/);
     if (dnsCheckMatch && method === 'GET') {
@@ -878,7 +994,7 @@ export async function handleApi(
     // DELETE /api/domains/:id
     const domainDeleteMatch = path.match(/^\/api\/domains\/([^/]+)$/);
     if (domainDeleteMatch && method === 'DELETE') {
-      return await deleteDomain(env, customerId, domainDeleteMatch[1]);
+      return await deleteDomain(env, customerId, domainDeleteMatch[1], { id: userBySession?.id, email: userBySession?.email }, ctx);
     }
     // GET /api/reports
     if (path === '/api/reports' && method === 'GET') {
@@ -941,13 +1057,22 @@ export async function handleApi(
 
       const token = crypto.randomUUID();
       const expiresAt = Math.floor(Date.now() / 1000) + 7 * 24 * 3600; // 7 days
+      const inviteEmail = body.email.toLowerCase().trim();
+      const inviteRole = body.role === 'admin' ? 'admin' : 'member';
       await insertInvite(env.DB, {
         token,
-        email: body.email.toLowerCase().trim(),
-        role: body.role === 'admin' ? 'admin' : 'member',
+        email: inviteEmail,
+        role: inviteRole,
         invited_by: actor.email,
         expires_at: expiresAt,
       });
+      logAudit(env.DB, {
+        customer_id: customerId,
+        actor_id: actor.id, actor_email: actor.email, actor_type: 'user',
+        action: 'auth.invite_sent',
+        resource_type: 'user', resource_name: inviteEmail,
+        after_value: { email: inviteEmail, role: inviteRole, invited_by: actor.email },
+      }, ctx);
       return json({ token }, 201);
     }
 
@@ -957,7 +1082,16 @@ export async function handleApi(
       const actor = await getUserBySession(env.DB, requestKey);
       if (!actor || actor.role !== 'admin') return err('admin required', 403);
       if (actor.id === teamMemberMatch[1]) return err('cannot remove yourself', 400);
+      const removed = await getUserByEmail(env.DB, teamMemberMatch[1]).catch(() => null)
+        ?? await env.DB.prepare('SELECT id, email, name, role FROM users WHERE id = ?').bind(teamMemberMatch[1]).first<{ id: string; email: string; name: string; role: string }>().catch(() => null);
       await deleteUser(env.DB, teamMemberMatch[1]);
+      logAudit(env.DB, {
+        customer_id: customerId,
+        actor_id: actor.id, actor_email: actor.email, actor_type: 'user',
+        action: 'team.member_removed',
+        resource_type: 'user', resource_id: teamMemberMatch[1], resource_name: removed?.email ?? teamMemberMatch[1],
+        before_value: removed ? { email: removed.email, name: removed.name, role: removed.role } : null,
+      }, ctx);
       return json({ ok: true });
     }
 
@@ -1014,6 +1148,25 @@ export async function handleApi(
         });
         await updateSpfFlattenResult(env.DB, id, result.flattened_record, result.ip_count, result.cf_record_id);
 
+        logAudit(env.DB, {
+          customer_id: customerId,
+          actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
+          action: 'spf_flatten.enable',
+          resource_type: 'domain', resource_id: String(id), resource_name: domain.domain,
+          before_value: { spf_record: result.canonical_record },
+          after_value: { spf_record: result.flattened_record, ip_count: result.ip_count },
+        }, ctx);
+        if (result.cf_record_id) {
+          logAudit(env.DB, {
+            customer_id: customerId,
+            actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
+            action: 'dns.update',
+            resource_type: 'dns_record', resource_id: result.cf_record_id, resource_name: `TXT _spf.${domain.domain}`,
+            before_value: { content: result.canonical_record },
+            after_value: { content: result.flattened_record },
+          }, ctx);
+        }
+
         const config = await getSpfFlattenConfig(env.DB, id);
         return json({ ok: true, config }, 201);
       }
@@ -1034,6 +1187,14 @@ export async function handleApi(
           }
         }
 
+        logAudit(env.DB, {
+          customer_id: customerId,
+          actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
+          action: 'spf_flatten.disable',
+          resource_type: 'domain', resource_id: String(id), resource_name: domain.domain,
+          before_value: { spf_record: config.flattened_record ?? config.canonical_record },
+          after_value: { spf_record: config.canonical_record },
+        }, ctx);
         await deleteSpfFlattenConfig(env.DB, id);
         return new Response(null, { status: 204 });
       }
@@ -1077,6 +1238,18 @@ export async function handleApi(
             tls_rpt_record_id: result.tls_rpt_record_id,
             cname_record_id: result.cname_record_id,
           });
+          const rd = reportsDomain(env)!;
+          logAudit(env.DB, {
+            customer_id: customerId,
+            actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
+            action: 'mta_sts.enable',
+            resource_type: 'domain', resource_id: String(id), resource_name: domain.domain,
+            after_value: { mode: result.mode, mx_hosts: result.mx_hosts, policy_id: result.policy_id },
+          }, ctx);
+          // Log each DNS record created
+          logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.create', resource_type: 'dns_record', resource_id: result.mta_sts_record_id, resource_name: `_mta-sts.${domain.domain}`, after_value: { type: 'TXT', name: `_mta-sts.${domain.domain}`, content: `v=STSv1; id=${result.policy_id}` } }, ctx);
+          logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.create', resource_type: 'dns_record', resource_id: result.tls_rpt_record_id, resource_name: `_smtp._tls.${domain.domain}`, after_value: { type: 'TXT', name: `_smtp._tls.${domain.domain}`, content: `v=TLSRPTv1; rua=mailto:tls-rpt@${rd}` } }, ctx);
+          logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.create', resource_type: 'dns_record', resource_id: result.cname_record_id, resource_name: `mta-sts.${domain.domain}`, after_value: { type: 'CNAME', name: `mta-sts.${domain.domain}`, proxied: true } }, ctx);
           return json({ ok: true, mode: result.mode, mx_hosts: result.mx_hosts });
         } catch (e: any) {
           return err(e.message ?? 'provisioning failed', 500);
@@ -1096,15 +1269,35 @@ export async function handleApi(
           const newPolicyId = generatePolicyId();
           await updateMtaStsTxtRecord(config.mta_sts_record_id!, newPolicyId, patchEnv);
           await updateMtaStsMode(env.DB, id, body.mode, newPolicyId);
+          logAudit(env.DB, {
+            customer_id: customerId,
+            actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
+            action: 'mta_sts.mode_change',
+            resource_type: 'domain', resource_id: String(id), resource_name: domain.domain,
+            before_value: { mode: config.mode, policy_id: config.policy_id },
+            after_value: { mode: body.mode, policy_id: newPolicyId },
+          }, ctx);
+          if (config.mta_sts_record_id) {
+            logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.update', resource_type: 'dns_record', resource_id: config.mta_sts_record_id, resource_name: `_mta-sts.${domain.domain}`, before_value: { content: `v=STSv1; id=${config.policy_id}` }, after_value: { content: `v=STSv1; id=${newPolicyId}` } }, ctx);
+          }
           return json({ ok: true, mode: body.mode, policy_id: newPolicyId });
         }
 
         if (body.refresh_mx) {
+          const oldMxHosts = config.mx_hosts ? config.mx_hosts.split(',').filter(Boolean) : [];
           const mxHosts = await discoverMxHosts(domain.domain);
           if (mxHosts.length === 0) return err('No MX records found', 400);
           const newPolicyId = generatePolicyId();
           await updateMtaStsTxtRecord(config.mta_sts_record_id!, newPolicyId, patchEnv);
           await updateMtaStsMxHosts(env.DB, id, mxHosts.join(','), newPolicyId);
+          logAudit(env.DB, {
+            customer_id: customerId,
+            actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
+            action: 'mta_sts.mx_refresh',
+            resource_type: 'domain', resource_id: String(id), resource_name: domain.domain,
+            before_value: { mx_hosts: oldMxHosts, policy_id: config.policy_id },
+            after_value: { mx_hosts: mxHosts, policy_id: newPolicyId },
+          }, ctx);
           return json({ ok: true, mx_hosts: mxHosts, policy_id: newPolicyId });
         }
 
@@ -1131,6 +1324,18 @@ export async function handleApi(
           }
         }
 
+        logAudit(env.DB, {
+          customer_id: customerId,
+          actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
+          action: 'mta_sts.disable',
+          resource_type: 'domain', resource_id: String(id), resource_name: domain.domain,
+          before_value: { mode: config.mode, mx_hosts: config.mx_hosts?.split(',').filter(Boolean) ?? [], policy_id: config.policy_id },
+        }, ctx);
+        // Log each DNS record deleted
+        const rd = reportsDomain(env);
+        if (config.mta_sts_record_id) logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.delete', resource_type: 'dns_record', resource_id: config.mta_sts_record_id, resource_name: `_mta-sts.${domain.domain}`, before_value: { type: 'TXT', name: `_mta-sts.${domain.domain}`, content: `v=STSv1; id=${config.policy_id}` } }, ctx);
+        if (config.tls_rpt_record_id && rd) logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.delete', resource_type: 'dns_record', resource_id: config.tls_rpt_record_id, resource_name: `_smtp._tls.${domain.domain}`, before_value: { type: 'TXT', name: `_smtp._tls.${domain.domain}`, content: `v=TLSRPTv1; rua=mailto:tls-rpt@${rd}` } }, ctx);
+        if (config.cname_record_id) logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.delete', resource_type: 'dns_record', resource_id: config.cname_record_id, resource_name: `mta-sts.${domain.domain}`, before_value: { type: 'CNAME', name: `mta-sts.${domain.domain}` } }, ctx);
         await deleteMtaStsConfig(env.DB, id);
         return new Response(null, { status: 204 });
       }
@@ -1146,6 +1351,24 @@ export async function handleApi(
       const mxHosts = config.mx_hosts ? config.mx_hosts.split(',').filter(Boolean) : [];
       const policy = buildPolicyFile(config.mode, mxHosts, 86400);
       return new Response(policy, { headers: { 'Content-Type': 'text/plain' } });
+    }
+
+    // GET /api/audit-log — admin only
+    if (path === '/api/audit-log' && method === 'GET') {
+      const actor = await getUserBySession(env.DB, requestKey);
+      if (!actor || actor.role !== 'admin') return err('admin required', 403);
+      const page  = parseInt(url.searchParams.get('page')  ?? '1',  10);
+      const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
+      const { results } = await getAuditLog(env.DB, customerId, {
+        page:      isNaN(page)  ? 1  : page,
+        limit:     isNaN(limit) ? 50 : limit,
+        action:    url.searchParams.get('action')    ?? undefined,
+        domain_id: url.searchParams.get('domain_id') ?? undefined,
+        actor_id:  url.searchParams.get('actor_id')  ?? undefined,
+        since:     url.searchParams.get('since')  ? parseInt(url.searchParams.get('since')!, 10)  : undefined,
+        until:     url.searchParams.get('until')  ? parseInt(url.searchParams.get('until')!, 10)  : undefined,
+      });
+      return json({ entries: results, page, limit });
     }
 
     return err('not found', 404);

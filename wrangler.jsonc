@@ -97,6 +97,16 @@
 	// 	{ "pattern": "mail.yourdomain.com/*", "zone_name": "yourdomain.com" }
 	// ],
 
+	// Rate limiting (free tier: 1000 req/10s shared across all limiters)
+	// AUTH_LIMITER: tight — 10 auth attempts per minute per IP
+	// API_LIMITER:  loose — 200 API requests per minute per IP (stops key brute-force, allows normal use)
+	"unsafe": {
+		"bindings": [
+			{ "name": "AUTH_LIMITER", "type": "ratelimit", "namespace_id": "1001", "simple": { "limit": 10,  "period": 60 } },
+			{ "name": "API_LIMITER",  "type": "ratelimit", "namespace_id": "1002", "simple": { "limit": 200, "period": 60 } }
+		]
+	},
+
 	// Crons:
 	//   0 8 * * *  — daily DNS monitor check
 	//   0 9 * * 1  — weekly DMARC digest email (Mondays 9am UTC)

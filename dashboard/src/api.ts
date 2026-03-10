@@ -215,6 +215,28 @@ export async function disableMtaSts(domainId: number): Promise<void> {
   if (!res.ok) await throwApiError(res);
 }
 
+export async function getAuditLog(opts: {
+  page?: number;
+  limit?: number;
+  action?: string;
+  domain_id?: string;
+  actor_id?: string;
+  since?: number;
+  until?: number;
+} = {}): Promise<{ entries: import('./types').AuditLogEntry[]; page: number; limit: number }> {
+  const params = new URLSearchParams();
+  if (opts.page)      params.set('page',      String(opts.page));
+  if (opts.limit)     params.set('limit',     String(opts.limit));
+  if (opts.action)    params.set('action',    opts.action);
+  if (opts.domain_id) params.set('domain_id', opts.domain_id);
+  if (opts.actor_id)  params.set('actor_id',  opts.actor_id);
+  if (opts.since)     params.set('since',     String(opts.since));
+  if (opts.until)     params.set('until',     String(opts.until));
+  const res = await apiFetch(`/api/audit-log?${params}`);
+  if (!res.ok) await throwApiError(res);
+  return res.json();
+}
+
 export async function logout(): Promise<void> {
   await apiFetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
   localStorage.removeItem('ia_api_key');

@@ -612,19 +612,33 @@ function MtaStsHealthCard({
             </button>
           ) : (
             <>
-              {mode === 'testing' && (
-                <button
-                  onClick={() => onSetMode('enforce')}
-                  disabled={busy}
-                  style={{
-                    padding: '0.35rem 0.85rem', fontSize: '0.8rem', cursor: busy ? 'default' : 'pointer',
-                    background: '#15803d', color: '#fff', border: 'none',
-                    borderRadius: '6px', opacity: busy ? 0.6 : 1,
-                  }}
-                >
-                  {busy ? 'Working…' : 'Graduate to enforce'}
-                </button>
-              )}
+              {mode === 'testing' && (() => {
+                const agedays = config?.created_at
+                  ? (Date.now() / 1000 - config.created_at) / 86400
+                  : 0;
+                const failures = summary?.total_failure ?? 0;
+                const ready = agedays >= 7 && failures === 0;
+                const daysLeft = Math.ceil(7 - agedays);
+                return ready ? (
+                  <button
+                    onClick={() => onSetMode('enforce')}
+                    disabled={busy}
+                    style={{
+                      padding: '0.35rem 0.85rem', fontSize: '0.8rem', cursor: busy ? 'default' : 'pointer',
+                      background: '#15803d', color: '#fff', border: 'none',
+                      borderRadius: '6px', opacity: busy ? 0.6 : 1,
+                    }}
+                  >
+                    {busy ? 'Working…' : 'Graduate to enforce'}
+                  </button>
+                ) : (
+                  <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>
+                    {failures > 0
+                      ? `Fix ${failures} TLS failure${failures !== 1 ? 's' : ''} first`
+                      : `Graduate available in ${daysLeft}d`}
+                  </span>
+                );
+              })()}
               {mode === 'enforce' && (
                 <button
                   onClick={() => onSetMode('testing')}

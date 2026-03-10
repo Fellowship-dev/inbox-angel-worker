@@ -6,6 +6,7 @@ import { sendChangeNotification } from './monitor/notify';
 import { sendWeeklyDigests } from './digest/weekly';
 import { ensureMigrated } from './db/migrate';
 import { reportsDomain, fromEmail, enrichEnv, getZoneId } from './env-utils';
+import { logAudit } from './audit/log';
 import { flattenSpf } from './email/spf-flattener';
 import { lookupSpf } from './email/dns-check';
 import { discoverMxHosts, generatePolicyId, buildPolicyFile, updateMtaStsTxtRecord } from './email/mta-sts';
@@ -27,6 +28,8 @@ export interface Env {
   DEBUG?: string;                // "true" for verbose CF Workers Logs (default: off)
   // Bindings
   SEND_EMAIL?: SendEmail;        // CF Email Workers outbound binding
+  AUTH_LIMITER?: { limit(opts: { key: string }): Promise<{ success: boolean }> }; // auth rate limiting (10/min)
+  API_LIMITER?: { limit(opts: { key: string }): Promise<{ success: boolean }> };  // global rate limiting (200/min)
   // Self-hosted single-tenant init — auto-provisions on first request
   BASE_DOMAIN?: string;          // e.g. "yourdomain.com" — required
   // Optional overrides — derived from BASE_DOMAIN when not set
@@ -100,6 +103,15 @@ export default {
             }, config.cf_record_id);
             await updateSpfFlattenResult(env.DB, config.domain_id, result.flattened_record, result.ip_count, result.cf_record_id);
             console.log(`[spf-flatten] ${domain.domain}: updated (${result.ip_count} IPs)`);
+            logAudit(env.DB, {
+              customer_id: domain.customer_id,
+              actor_type: 'system',
+              action: 'spf_flatten.update',
+              resource_type: 'domain', resource_id: String(domain.id), resource_name: domain.domain,
+              before_value: { spf_record: config.flattened_record ?? config.canonical_record },
+              after_value: { spf_record: result.flattened_record, ip_count: result.ip_count },
+              meta: { cron: '0 10 * * *' },
+            });
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             await updateSpfFlattenError(env.DB, config.domain_id, msg);
@@ -139,6 +151,15 @@ export default {
             await updateMtaStsTxtRecord(cfg.mta_sts_record_id, newPolicyId, patchEnv);
             await updateMtaStsMxHosts(env.DB, cfg.domain_id, liveMx.join(','), newPolicyId);
             console.log(`[mta-sts] ${domain.domain}: MX changed, policy_id updated`);
+            logAudit(env.DB, {
+              customer_id: domain.customer_id,
+              actor_type: 'system',
+              action: 'cron.mta_sts_mx',
+              resource_type: 'domain', resource_id: String(domain.id), resource_name: domain.domain,
+              before_value: { mx_hosts: storedMx, policy_id: cfg.policy_id },
+              after_value: { mx_hosts: liveMx, policy_id: newPolicyId },
+              meta: { cron: '0 8 * * *' },
+            });
           }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);

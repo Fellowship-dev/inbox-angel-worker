@@ -277,6 +277,30 @@ const MIGRATIONS: { version: number; sql: string }[] = [
       CREATE INDEX IF NOT EXISTS idx_tls_reports_domain ON tls_reports(domain_id, date_begin);
     `,
 	},
+	{
+		// Audit log — immutable record of all mutations with before/after state
+		version: 16,
+		sql: `
+      CREATE TABLE IF NOT EXISTS audit_log (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        customer_id   TEXT    NOT NULL,
+        actor_id      TEXT,
+        actor_email   TEXT,
+        actor_type    TEXT    NOT NULL DEFAULT 'user',
+        action        TEXT    NOT NULL,
+        resource_type TEXT,
+        resource_id   TEXT,
+        resource_name TEXT,
+        before_value  TEXT,
+        after_value   TEXT,
+        meta          TEXT,
+        created_at    INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      CREATE INDEX IF NOT EXISTS idx_audit_customer_created ON audit_log(customer_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_audit_actor            ON audit_log(actor_id);
+      CREATE INDEX IF NOT EXISTS idx_audit_resource         ON audit_log(resource_type, resource_id);
+    `,
+	},
 ];
 
 let migrated = false;
