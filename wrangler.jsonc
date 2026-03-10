@@ -38,14 +38,14 @@
 	//
 	// 6. Set secrets (run each, paste value when prompted):
 	//      wrangler secret put CLOUDFLARE_API_TOKEN ← EMAIL token (from step above)
-	//      wrangler secret put CLOUDFLARE_ZONE_ID   ← your zone ID (dash → domain → Overview sidebar)
 	//      wrangler secret put BASE_DOMAIN          ← your root domain (e.g. yourdomain.com)
 	//
-	//    That's it — the rest auto-derives:
-	//      REPORTS_DOMAIN = reports.<BASE_DOMAIN>     (override with: wrangler secret put REPORTS_DOMAIN)
-	//      FROM_EMAIL     = noreply@reports.<BASE_DOMAIN> (override with: wrangler secret put FROM_EMAIL)
-	//      CUSTOMER_NAME  = "Self-hosted"             (override with: wrangler secret put CUSTOMER_NAME)
-	//      CUSTOMER_EMAIL = <FROM_EMAIL>              (override with: wrangler secret put CUSTOMER_EMAIL)
+	//    That's it — everything else auto-derives:
+	//      CLOUDFLARE_ZONE_ID = looked up via CF API from BASE_DOMAIN (override: wrangler secret put CLOUDFLARE_ZONE_ID)
+	//      REPORTS_DOMAIN     = reports.<BASE_DOMAIN>                 (override: wrangler secret put REPORTS_DOMAIN)
+	//      FROM_EMAIL         = noreply@reports.<BASE_DOMAIN>         (override: wrangler secret put FROM_EMAIL)
+	//      CUSTOMER_NAME      = "Self-hosted"                         (override: wrangler secret put CUSTOMER_NAME)
+	//      CUSTOMER_EMAIL     = <FROM_EMAIL>                          (override: wrangler secret put CUSTOMER_EMAIL)
 	// 7. Create workers.dev subdomain (required for cron scheduling — no dashboard visit needed):
 	//      curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/<account_id>/workers/subdomain" \
 	//        -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \

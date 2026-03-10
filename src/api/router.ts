@@ -89,7 +89,7 @@ import { provisionDomain, deprovisionDomain, DnsProvisionError } from '../dns/pr
 import { ensureEmailRouting } from '../setup/email-routing';
 import { track } from '../telemetry';
 import { debug } from '../debug';
-import { reportsDomain, fromEmail } from '../env-utils';
+import { reportsDomain, fromEmail, enrichEnv } from '../env-utils';
 import { flattenSpf, restoreSpf } from '../email/spf-flattener';
 import { lookupSpf } from '../email/dns-check';
 import {
@@ -436,9 +436,10 @@ async function getDomainSources(env: Env, customerId: string, domainId: string, 
 
 export async function handleApi(
   request: Request,
-  env: Env,
+  envRaw: Env,
   ctx: ExecutionContext,
 ): Promise<Response> {
+  const env = await enrichEnv(envRaw);
   const url = new URL(request.url);
   const method = request.method.toUpperCase();
   const path = url.pathname;

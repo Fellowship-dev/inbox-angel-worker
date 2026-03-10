@@ -5,7 +5,7 @@ import { checkSubscription } from './monitor/check';
 import { sendChangeNotification } from './monitor/notify';
 import { sendWeeklyDigests } from './digest/weekly';
 import { ensureMigrated } from './db/migrate';
-import { reportsDomain, fromEmail } from './env-utils';
+import { reportsDomain, fromEmail, enrichEnv } from './env-utils';
 import { flattenSpf } from './email/spf-flattener';
 import { lookupSpf } from './email/dns-check';
 import { discoverMxHosts, generatePolicyId, buildPolicyFile, updateMtaStsTxtRecord } from './email/mta-sts';
@@ -78,6 +78,7 @@ export default {
   async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
     if (!env.DB) { console.error('[cron] DB binding missing — D1 not configured'); return; }
     await ensureMigrated(env.DB);
+    env = await enrichEnv(env);
     const rd = reportsDomain(env) ?? '';
     const fe = fromEmail(env) ?? '';
     const derivedEnv = { ...env, REPORTS_DOMAIN: rd, FROM_EMAIL: fe };
@@ -196,9 +197,9 @@ function setupPage(): Response {
     <li>Create a D1 database:<br><pre>wrangler d1 create inbox-angel</pre></li>
     <li>Copy the <code>database_id</code> from the output and paste it into <code>wrangler.jsonc</code> under <code>d1_databases[0].database_id</code>.</li>
     <li>Redeploy:<br><pre>npm run deploy</pre>The first request after redeploy will auto-migrate the schema — no extra step needed.</li>
-    <li>Set your secrets and vars — edit <code>wrangler.jsonc</code> and fill in <code>BASE_DOMAIN</code> and optionally <code>CUSTOMER_EMAIL</code> / <code>CUSTOMER_NAME</code>. Then set the two secrets:<br><pre>wrangler secret put CLOUDFLARE_API_TOKEN
-wrangler secret put CLOUDFLARE_ZONE_ID</pre>
-      <small>No <code>API_KEY</code> needed — you'll create your login on first visit to the dashboard. <code>REPORTS_DOMAIN</code> and <code>FROM_EMAIL</code> are auto-derived from <code>BASE_DOMAIN</code> unless you override them.</small>
+    <li>Set your two required secrets:<br><pre>wrangler secret put CLOUDFLARE_API_TOKEN
+wrangler secret put BASE_DOMAIN</pre>
+      <small>Everything else auto-derives — zone ID is looked up from BASE_DOMAIN, reports subdomain defaults to <code>reports.&lt;BASE_DOMAIN&gt;</code>. No <code>API_KEY</code> needed — you'll create your login on first visit to the dashboard.</small>
     </li>
   </ol>
   <div class="note">
