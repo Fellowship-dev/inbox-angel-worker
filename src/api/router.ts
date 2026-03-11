@@ -43,7 +43,7 @@
 //   POST   /api/team/invite                   — send invite link (admin only)
 //   DELETE /api/team/:id                      — remove team member (admin only)
 //
-// Self-hosted lazy init: if BASE_DOMAIN env var is set and no domain exists yet,
+// Self-hosted lazy init: if base domain is configured (via wizard/D1) and no domain exists yet,
 // the first authenticated request auto-provisions the domain (no bootstrap call needed).
 
 import { Env } from '../index';
@@ -167,8 +167,8 @@ async function addDomain(request: Request, env: Env, userEmail?: string, ctx?: E
     return err('invalid domain format', 400);
   }
 
-  const rdomain = reportsDomain(env);
-  if (!rdomain) return err('REPORTS_DOMAIN is not configured', 500);
+  const rdomain = reportsDomain();
+  if (!rdomain) return err('Reports domain not configured — complete the setup wizard first', 500);
 
   // Fixed rua address — routing is by XML policy_domain, not by address encoding
   const ruaAddress = `rua@${rdomain}`;
@@ -253,7 +253,7 @@ async function deleteDomain(env: Env, domainId: string, actor?: { id?: string; e
 
   // Best-effort cleanup of the CF DNS record (non-fatal if it fails)
   if (domain.dns_record_id) {
-    const rdomain = reportsDomain(env);
+    const rdomain = reportsDomain();
     const recordName = rdomain ? `${domain.domain}._report._dmarc.${rdomain}` : domain.dns_record_id;
     logAudit(env.DB!, {
       actor_id: actor?.id ?? null, actor_email: actor?.email ?? null, actor_type: 'user',
@@ -414,7 +414,8 @@ async function _handleApi(
   envRaw: Env,
   ctx: ExecutionContext,
 ): Promise<Response> {
-  const env = await enrichEnv(envRaw, envRaw.DB);
+  await enrichEnv(envRaw, envRaw.DB);
+  const env = envRaw;
   const url = new URL(request.url);
   const method = request.method.toUpperCase();
   const path = url.pathname;
@@ -463,8 +464,8 @@ async function _handleApi(
 
   // POST /api/check-sessions — generate a unique free-check email for a browser session
   if (path === '/api/check-sessions' && method === 'POST') {
-    const rd = reportsDomain(env);
-    if (!rd) return err('REPORTS_DOMAIN is not configured', 500);
+    const rd = reportsDomain();
+    if (!rd) return err('Reports domain not configured — complete the setup wizard first', 500);
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
     const token = Array.from(crypto.getRandomValues(new Uint8Array(8)))
       .map(b => chars[b % chars.length]).join('');
@@ -917,7 +918,7 @@ async function _handleApi(
       }
 
       // Build updated TXT record, preserving rua= and any pct= from existing record
-      const rd = reportsDomain(env);
+      const rd = reportsDomain();
       const ruaPart = rd ? `; rua=mailto:${domain.rua_address}` : '';
       const newRecord = `v=DMARC1; p=${policy}${ruaPart}`;
 
@@ -950,7 +951,7 @@ async function _handleApi(
       const domain = await getDomainById(env.DB, id);
       if (!domain) return err('domain not found', 404);
 
-      const rd = reportsDomain(env);
+      const rd = reportsDomain();
       const DKIM_SELECTORS = ['google', 'selector1', 'selector2', 'mail', 'default', 'k1', 'dkim', 'mandrill', 'mailjet', 'sendgrid', 'smtp', 'pm', 'brevo', 'resend', 'mxroute', 'zoho'];
 
       const [dmarcData, routingData, dkimData] = await Promise.all([
@@ -1056,12 +1057,12 @@ async function _handleApi(
     // POST /api/setup/email-routing — set up MX records + catch-all rule for reports domain
     if (path === '/api/setup/email-routing' && method === 'POST') {
       if (!env.CLOUDFLARE_API_TOKEN || !getZoneId()) return err('Cloudflare credentials not configured', 400);
-      const rd = reportsDomain(env);
-      if (!rd) return err('REPORTS_DOMAIN not configured', 400);
+      const rd = reportsDomain();
+      if (!rd) return err('Reports domain not configured — complete the setup wizard first', 400);
 
       let result;
       try {
-        result = await ensureEmailRouting({ ...env, REPORTS_DOMAIN: rd });
+        result = await ensureEmailRouting(env);
       } catch (e: any) {
         return err(e.message ?? 'Email routing setup failed', 500);
       }
@@ -1140,10 +1141,11 @@ async function _handleApi(
       if (!env.CLOUDFLARE_API_TOKEN || !getZoneId()) return err('Cloudflare credentials not configured', 400);
       const accountId = getAccountId();
       if (!accountId) return err('Account ID not available', 400);
-      if (!env.BASE_DOMAIN) return err('BASE_DOMAIN not configured', 400);
+      const bd = getBaseDomain();
+      if (!bd) return err('Base domain not configured', 400);
 
       const workerName = env.WORKER_NAME ?? 'inbox-angel-worker';
-      const hostname = `inbox-angel.${env.BASE_DOMAIN}`;
+      const hostname = `inbox-angel.${bd}`;
 
       const domainRes = await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/domains`, {
         method: 'PUT',
@@ -1327,7 +1329,7 @@ async function _handleApi(
 
       // POST — enable + trigger initial flatten
       if (method === 'POST') {
-        if (!available) return err('Cloudflare credentials not configured (CLOUDFLARE_API_TOKEN + BASE_DOMAIN required)', 422);
+        if (!available) return err('Cloudflare credentials not configured — complete the setup wizard first', 422);
 
         const flatEnv = {
           CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN!,
@@ -1430,7 +1432,7 @@ async function _handleApi(
 
       if (method === 'POST') {
         // Enable MTA-STS
-        if (!env.CLOUDFLARE_API_TOKEN || !getZoneId() || !env.REPORTS_DOMAIN) {
+        if (!env.CLOUDFLARE_API_TOKEN || !getZoneId() || !reportsDomain()) {
           return err('Cloudflare credentials not configured', 400);
         }
         const existing = await getMtaStsConfig(env.DB, id);
@@ -1439,7 +1441,6 @@ async function _handleApi(
         try {
           const result = await provisionMtaSts(domain.domain, {
             CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN,
-            REPORTS_DOMAIN: reportsDomain(env)!,
             WORKER_NAME: env.WORKER_NAME ?? 'inbox-angel-worker',
           });
           await insertMtaStsConfig(env.DB, {
@@ -1451,7 +1452,7 @@ async function _handleApi(
             tls_rpt_record_id: result.tls_rpt_record_id,
             cname_record_id: result.cname_record_id,
           });
-          const rd = reportsDomain(env)!;
+          const rd = reportsDomain()!;
           logAudit(env.DB, {
                   actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
             action: 'mta_sts.enable',
@@ -1543,7 +1544,7 @@ async function _handleApi(
           before_value: { mode: config.mode, mx_hosts: config.mx_hosts?.split(',').filter(Boolean) ?? [], policy_id: config.policy_id },
         }, ctx);
         // Log each DNS record deleted
-        const rd = reportsDomain(env);
+        const rd = reportsDomain();
         if (config.mta_sts_record_id) logAudit(env.DB, { actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.delete', resource_type: 'dns_record', resource_id: config.mta_sts_record_id, resource_name: `_mta-sts.${domain.domain}`, before_value: { type: 'TXT', name: `_mta-sts.${domain.domain}`, content: `v=STSv1; id=${config.policy_id}` } }, ctx);
         if (config.tls_rpt_record_id && rd) logAudit(env.DB, { actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.delete', resource_type: 'dns_record', resource_id: config.tls_rpt_record_id, resource_name: `_smtp._tls.${domain.domain}`, before_value: { type: 'TXT', name: `_smtp._tls.${domain.domain}`, content: `v=TLSRPTv1; rua=mailto:tls-rpt@${rd}` } }, ctx);
         if (config.cname_record_id) logAudit(env.DB, { actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.delete', resource_type: 'dns_record', resource_id: config.cname_record_id, resource_name: `mta-sts.${domain.domain}`, before_value: { type: 'CNAME', name: `mta-sts.${domain.domain}` } }, ctx);

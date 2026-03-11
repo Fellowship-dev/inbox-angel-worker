@@ -10,7 +10,7 @@
 // can serve the policy file on the correct hostname over CF's Universal SSL.
 
 import { MtaStsMode } from '../db/types';
-import { getZoneId } from '../env-utils';
+import { getZoneId, reportsDomain } from '../env-utils';
 import { logAudit } from '../audit/log';
 
 const CF_API = 'https://api.cloudflare.com/client/v4';
@@ -28,7 +28,6 @@ export interface MtaStsAuditOpts {
 
 export interface MtaStsProvisionEnv {
   CLOUDFLARE_API_TOKEN: string;
-  REPORTS_DOMAIN: string;   // e.g. reports.yourdomain.com
   WORKER_NAME: string;      // e.g. inbox-angel-worker
 }
 
@@ -292,7 +291,7 @@ export async function provisionMtaSts(
   const tls_rpt_record_id = await createDnsRecord(env, {
     type: 'TXT',
     name: `_smtp._tls.${domain}`,
-    content: `v=TLSRPTv1; rua=mailto:tls-rpt@${env.REPORTS_DOMAIN}`,
+    content: `v=TLSRPTv1; rua=mailto:tls-rpt@${reportsDomain()}`,
     ttl: 3600,
     comment: `InboxAngel TLS-RPT for ${domain}`,
   }, audit);

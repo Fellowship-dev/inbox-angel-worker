@@ -12,7 +12,7 @@
 // We manage this record via Cloudflare DNS API. The CF record ID is stored in
 // domains.dns_record_id so we can delete it when the domain is removed.
 
-import { getZoneId } from '../env-utils';
+import { getZoneId, reportsDomain } from '../env-utils';
 import { logAudit } from '../audit/log';
 
 const CF_API = 'https://api.cloudflare.com/client/v4';
@@ -44,7 +44,6 @@ export interface DnsProvisionResult {
 
 interface ProvisionEnv {
   CLOUDFLARE_API_TOKEN: string;
-  REPORTS_DOMAIN: string;  // e.g. "reports.inboxangel.io"
 }
 
 interface DeprovisionEnv {
@@ -68,7 +67,7 @@ export async function provisionDomain(
   audit?: DnsAuditOpts,
 ): Promise<DnsProvisionResult> {
   // RFC 7489 §7.1 cross-domain authorization record name
-  const recordName = `${policyDomain}._report._dmarc.${env.REPORTS_DOMAIN}`;
+  const recordName = `${policyDomain}._report._dmarc.${reportsDomain()}`;
   const zoneId = getZoneId();
 
   if (!env.CLOUDFLARE_API_TOKEN || !zoneId) {

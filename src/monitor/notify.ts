@@ -3,11 +3,10 @@
 // Falls back to console.log if binding is absent (wrangler dev has no local send_email support).
 
 import { DomainChange } from './check';
+import { reportsDomain, fromEmail } from '../env-utils';
 
 export interface NotifyEnv {
   SEND_EMAIL?: SendEmail;
-  FROM_EMAIL: string;
-  REPORTS_DOMAIN: string;
 }
 
 const SEVERITY_EMOJI: Record<DomainChange['severity'], string> = {
@@ -16,7 +15,7 @@ const SEVERITY_EMOJI: Record<DomainChange['severity'], string> = {
   changed: '⚠️',
 };
 
-function buildEmailBody(domain: string, changes: DomainChange[], reportsDomain: string): string {
+function buildEmailBody(domain: string, changes: DomainChange[], rd: string): string {
   const lines: string[] = [
     `We detected changes to the email security configuration of ${domain}.`,
     '',
@@ -30,7 +29,7 @@ function buildEmailBody(domain: string, changes: DomainChange[], reportsDomain: 
   if (hasDegraded) {
     lines.push(
       'Some of these changes may leave your domain exposed to spoofing.',
-      'Want us to fix it for you? Reply to this email or sign up at https://' + reportsDomain.replace(/^reports\./, ''),
+      'Want us to fix it for you? Reply to this email or sign up at https://' + rd.replace(/^reports\./, ''),
       '',
     );
   } else {
@@ -56,7 +55,8 @@ export async function sendChangeNotification(
     ? `⚠️ ${domain} email security degraded`
     : `${domain} email security updated`;
 
-  const body = buildEmailBody(domain, changes, env.REPORTS_DOMAIN);
+  const rd = reportsDomain()!;
+  const body = buildEmailBody(domain, changes, rd);
 
   if (!env.SEND_EMAIL) {
     console.log(`[notify] SEND_EMAIL binding not configured — would send to ${email}: ${subject}\n${body}`);
@@ -65,7 +65,7 @@ export async function sendChangeNotification(
 
   try {
     await env.SEND_EMAIL.send({
-      from: { name: 'InboxAngel', email: env.FROM_EMAIL },
+      from: { name: 'InboxAngel', email: fromEmail()! },
       to: [email],
       subject,
       text: body,

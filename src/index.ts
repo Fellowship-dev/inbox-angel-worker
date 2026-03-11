@@ -5,7 +5,7 @@ import { checkSubscription } from './monitor/check';
 import { sendChangeNotification } from './monitor/notify';
 import { sendWeeklyDigests } from './digest/weekly';
 import { ensureMigrated } from './db/migrate';
-import { reportsDomain, fromEmail, enrichEnv, getZoneId } from './env-utils';
+import { enrichEnv, getZoneId } from './env-utils';
 import { logAudit } from './audit/log';
 import { track } from './telemetry';
 import { flattenSpf } from './email/spf-flattener';
@@ -28,10 +28,6 @@ export interface Env {
   SEND_EMAIL?: SendEmail;        // CF Email Workers outbound binding
   AUTH_LIMITER?: { limit(opts: { key: string }): Promise<{ success: boolean }> }; // auth rate limiting (10/min)
   API_LIMITER?: { limit(opts: { key: string }): Promise<{ success: boolean }> };  // global rate limiting (200/min)
-  // Domain config — set via wizard (D1) or env var override
-  BASE_DOMAIN?: string;          // e.g. "yourdomain.com" — resolved from D1 when absent
-  REPORTS_DOMAIN?: string;       // defaults to "reports.<BASE_DOMAIN>"
-  FROM_EMAIL?: string;           // defaults to "noreply@reports.<BASE_DOMAIN>"
 }
 
 // HTTP API (dashboard calls, DNS provisioning)
@@ -75,10 +71,7 @@ export default {
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     if (!env.DB) { console.error('[cron] DB binding missing — D1 not configured'); return; }
     await ensureMigrated(env.DB);
-    env = await enrichEnv(env, env.DB);
-    const rd = reportsDomain(env) ?? '';
-    const fe = fromEmail(env) ?? '';
-    const derivedEnv = { ...env, REPORTS_DOMAIN: rd, FROM_EMAIL: fe };
+    await enrichEnv(env, env.DB);
 
     // Daily telemetry heartbeat — every day 11am UTC
     if (event.cron === '0 11 * * *') {
@@ -93,7 +86,7 @@ export default {
 
     // Weekly digest — every Monday 9am UTC
     if (event.cron === '0 9 * * 1') {
-      await sendWeeklyDigests(derivedEnv);
+      await sendWeeklyDigests(env);
       return;
     }
 
@@ -185,7 +178,7 @@ export default {
 
         if (changes.length > 0) {
           console.log(`[monitor] ${sub.domain} changed: ${changes.map(c => c.field).join(', ')}`);
-          await sendChangeNotification(sub.email, sub.domain, changes, derivedEnv);
+          await sendChangeNotification(sub.email, sub.domain, changes, env);
         }
       } catch (e) {
         console.error(`[monitor] error checking ${sub.domain}:`, e);

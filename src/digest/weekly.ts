@@ -7,6 +7,7 @@
 // Falls back to console.log if binding is absent (wrangler dev has no local send_email support).
 
 import { getWeeklyDomainStats, getTopFailingSources, DomainWeeklyStat, FailingSource } from '../db/queries';
+import { reportsDomain, fromEmail } from '../env-utils';
 import { version } from '../../package.json';
 
 const GH_RAW = 'https://raw.githubusercontent.com/Fellowship-dev/inbox-angel-worker/main/package.json';
@@ -26,8 +27,6 @@ async function fetchLatestVersion(): Promise<string | null> {
 export interface DigestEnv {
   DB: D1Database;
   SEND_EMAIL?: SendEmail;
-  FROM_EMAIL: string;
-  REPORTS_DOMAIN: string;
 }
 
 // ── Formatting ────────────────────────────────────────────────
@@ -131,7 +130,7 @@ async function sendDigest(
 
   try {
     await env.SEND_EMAIL.send({
-      from: { name: 'InboxAngel', email: env.FROM_EMAIL },
+      from: { name: 'InboxAngel', email: fromEmail()! },
       to: [email],
       subject,
       text: body,
@@ -148,7 +147,8 @@ export async function sendWeeklyDigests(env: DigestEnv, now = Date.now()): Promi
   const weekLabel = new Date(since * 1000).toLocaleDateString('en-US', {
     month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC',
   });
-  const ruaAddress = `rua@${env.REPORTS_DOMAIN}`;
+  const rd = reportsDomain()!;
+  const ruaAddress = `rua@${rd}`;
 
   const latestVersion = await fetchLatestVersion();
   if (latestVersion && latestVersion !== version) {
@@ -178,7 +178,7 @@ export async function sendWeeklyDigests(env: DigestEnv, now = Date.now()): Promi
       }
     }
 
-    const body = buildDigestBody(admin.name ?? 'there', stats, sourcesByDomain, weekLabel, ruaAddress, env.REPORTS_DOMAIN, latestVersion);
+    const body = buildDigestBody(admin.name ?? 'there', stats, sourcesByDomain, weekLabel, ruaAddress, rd, latestVersion);
     const hasIssues = stats.some(s => s.fail_messages > 0 || !s.dmarc_policy || s.dmarc_policy === 'none');
     const subject = hasIssues
       ? `⚠️ DMARC Weekly Digest — action needed`
