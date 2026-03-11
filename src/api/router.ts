@@ -1169,12 +1169,12 @@ async function _handleApi(
         `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records?type=TXT&name=${encodeURIComponent(recordName)}&per_page=100`,
         { headers: { Authorization: `Bearer ${token}` } }
       ).then(r => r.json() as Promise<{ result?: { id: string; content: string }[] }>);
-      const existingSpf = searchData.result?.find(r => r.content.startsWith('v=spf1'));
+      const existingSpf = searchData.result?.find(r => r.content.replace(/^"|"$/g, '').startsWith('v=spf1'));
       const existingId = existingSpf?.id;
 
       // Safety: require explicit confirmation when overwriting an existing record
       if (existingSpf && !body.confirm_overwrite) {
-        return json({ ok: false, needs_confirmation: true, existing_record: existingSpf.content, proposed_record: body.record }, 200);
+        return json({ ok: false, needs_confirmation: true, existing_record: existingSpf.content.replace(/^"|"$/g, ''), proposed_record: body.record }, 200);
       }
 
       const cfRes = existingId
