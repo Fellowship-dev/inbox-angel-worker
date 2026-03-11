@@ -751,15 +751,16 @@ async function _handleApi(
   if (env.API_KEY && requestKey === env.API_KEY) {
     // Direct API_KEY match (curl/automation)
     effectiveApiKey = env.API_KEY;
-  } else {
-    // Try session-based auth (dashboard login)
+  } else if (requestKey) {
+    // Try session-based auth (dashboard login) — only when a key is actually provided
     userBySession = await getUserBySession(env.DB!, requestKey);
     if (userBySession) {
       effectiveApiKey = requestKey;
-    } else if (!env.API_KEY) {
-      // Fall back to auto-generated key only when no env API_KEY is set
-      effectiveApiKey = (await getSetting(env.DB!, 'auto_api_key'))?.value;
     }
+  }
+  // Fall back to auto-generated key when no API_KEY env and no session matched
+  if (!effectiveApiKey && !env.API_KEY) {
+    effectiveApiKey = (await getSetting(env.DB!, 'auto_api_key'))?.value;
   }
 
   try {

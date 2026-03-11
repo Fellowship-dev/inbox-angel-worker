@@ -2,6 +2,7 @@ import { Env } from './index';
 import { getSettings, persistConfig } from './db/queries';
 
 // Module-level cache — lives for the lifetime of the Worker instance (reused across requests)
+let _enrichedOnce = false;
 let _zoneIdCache: string | undefined;
 let _accountIdCache: string | undefined;
 let _baseDomainCache: string | undefined;
@@ -100,8 +101,8 @@ async function resolveWorkersSubdomain(apiToken: string): Promise<string | undef
 export async function enrichEnv(env: Env, db?: D1Database): Promise<void> {
   const effectiveDb = db ?? env.DB;
 
-  // 1. Load from D1 if we have a database and any cache is empty
-  if (effectiveDb && (!_baseDomainCache || !_zoneIdCache || !_accountIdCache || !_reportsDomainCache || !_fromEmailCache || !_workersSubdomainCache)) {
+  // 1. Load from D1 if we have a database and haven't loaded yet
+  if (effectiveDb && !_enrichedOnce) {
     const settings = await getSettings(effectiveDb, [
       'base_domain', 'zone_id', 'account_id', 'reports_domain', 'from_email', 'workers_subdomain',
     ]);
@@ -112,6 +113,7 @@ export async function enrichEnv(env: Env, db?: D1Database): Promise<void> {
     if (!_reportsDomainCache) _reportsDomainCache = settings.get('reports_domain');
     if (!_fromEmailCache) _fromEmailCache = settings.get('from_email');
     if (!_workersSubdomainCache) _workersSubdomainCache = settings.get('workers_subdomain');
+    _enrichedOnce = true;
   }
 
   // 2. Resolve zone_id + account_id via API if still missing

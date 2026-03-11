@@ -201,6 +201,91 @@ function DomainStep({ onDomainSet }: { onDomainSet: (domainId: number) => void }
   );
 }
 
+function ProviderTypeahead({ selected, onAdd, customInclude, onCustomChange, onCustomAdd }: {
+  selected: Set<string>;
+  onAdd: (include: string) => void;
+  customInclude: string;
+  onCustomChange: (v: string) => void;
+  onCustomAdd: () => void;
+}) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+
+  const filtered = query.trim()
+    ? SPF_PROVIDERS.filter(p =>
+        !selected.has(p.include) &&
+        (p.name.toLowerCase().includes(query.toLowerCase()) || p.include.toLowerCase().includes(query.toLowerCase()))
+      )
+    : SPF_PROVIDERS.filter(p => !selected.has(p.include));
+
+  const handleSelect = (include: string) => {
+    onAdd(include);
+    setQuery('');
+    setOpen(false);
+  };
+
+  const handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Enter' && filtered.length > 0) {
+      e.preventDefault();
+      handleSelect(filtered[0].include);
+    } else if (e.key === 'Escape') {
+      setOpen(false);
+    }
+  };
+
+  return (
+    <div style={{ position: 'relative', marginTop: '0.3rem' }}>
+      <div style={{ display: 'flex', gap: '0.4rem' }}>
+        <input
+          type="text"
+          value={query || customInclude}
+          onInput={(e) => {
+            const v = (e.target as HTMLInputElement).value;
+            setQuery(v);
+            onCustomChange(v);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 200)}
+          onKeyDown={handleKeyDown}
+          placeholder="Search providers or type custom domain…"
+          style={{ flex: 1, padding: '0.45rem 0.6rem', fontSize: '0.82rem', border: '1px solid #d1d5db', borderRadius: '6px' }}
+        />
+        {customInclude.trim() && !SPF_PROVIDERS.some(p => p.include === customInclude.trim().toLowerCase()) && (
+          <button onClick={() => { onCustomAdd(); setQuery(''); }} style={{ ...s.secondaryBtn, padding: '0.4rem 0.75rem', fontSize: '0.8rem' }}>
+            Add custom
+          </button>
+        )}
+      </div>
+      {open && filtered.length > 0 && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10,
+          background: '#fff', border: '1px solid #d1d5db', borderRadius: '6px',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.1)', maxHeight: '180px', overflowY: 'auto',
+          marginTop: '2px',
+        }}>
+          {filtered.map(p => (
+            <div
+              key={p.include}
+              onMouseDown={() => handleSelect(p.include)}
+              style={{
+                padding: '0.4rem 0.6rem', cursor: 'pointer', fontSize: '0.82rem',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                borderBottom: '1px solid #f3f4f6',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = '#f9fafb')}
+              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+            >
+              <span style={{ color: '#374151' }}>{p.name}</span>
+              <code style={{ fontSize: '0.7rem', color: '#9ca3af' }}>{p.include}</code>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SpfStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext: () => void; onSkip: () => void }) {
   const { spf, cf_available } = status;
   const sev = spfSeverity(spf);
@@ -346,56 +431,39 @@ function SpfStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext:
         </p>
       ) : (
         <>
-          {/* Provider checkboxes */}
-          <p style={{ ...s.label, marginTop: '0.75rem' }}>Email providers</p>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.35rem 1rem', marginTop: '0.3rem' }}>
-            {SPF_PROVIDERS.map(p => (
-              <label key={p.include} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem', color: '#374151', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={selected.has(p.include)}
-                  onChange={() => toggleProvider(p.include)}
-                  style={{ margin: 0 }}
-                />
-                {p.name}
-                {detectedIncludeSet.has(p.include) && <span style={{ fontSize: '0.7rem', color: '#9ca3af' }}>(detected)</span>}
-              </label>
-            ))}
-          </div>
+          {/* Provider typeahead select */}
+          <p style={{ ...s.label, marginTop: '0.75rem' }}>Add email providers</p>
+          <ProviderTypeahead
+            selected={selected}
+            onAdd={(include) => setSelected(prev => new Set([...prev, include]))}
+            customInclude={customInclude}
+            onCustomChange={setCustomInclude}
+            onCustomAdd={addCustom}
+          />
 
-          {/* Unknown includes from existing record */}
-          {unknownIncludes.length > 0 && (
-            <div style={{ marginTop: '0.5rem' }}>
-              <p style={{ ...s.label, fontSize: '0.7rem' }}>Other includes (from current record)</p>
-              {unknownIncludes.map(inc => (
-                <label key={inc} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem', color: '#374151', cursor: 'pointer', marginTop: '0.15rem' }}>
-                  <input
-                    type="checkbox"
-                    checked={selected.has(inc)}
-                    onChange={() => toggleProvider(inc)}
-                    style={{ margin: 0 }}
-                  />
-                  <code style={s.inline}>{inc}</code>
-                  <button onClick={() => removeInclude(inc)} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: '0.75rem', padding: '0 0.2rem' }}>✕</button>
-                </label>
-              ))}
+          {/* Selected providers as removable chips */}
+          {selectedIncludes.length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginTop: '0.5rem' }}>
+              {selectedIncludes.map(inc => {
+                const provider = SPF_PROVIDERS.find(p => p.include === inc);
+                const isDetected = detectedIncludeSet.has(inc);
+                return (
+                  <span key={inc} style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                    background: isDetected ? '#eff6ff' : '#f3f4f6', border: `1px solid ${isDetected ? '#bfdbfe' : '#e5e7eb'}`,
+                    borderRadius: '999px', padding: '0.2rem 0.55rem', fontSize: '0.78rem', color: '#374151',
+                  }}>
+                    {provider ? provider.name : <code style={{ fontSize: '0.75rem' }}>{inc}</code>}
+                    {isDetected && <span style={{ fontSize: '0.65rem', color: '#93c5fd' }}>current</span>}
+                    <button onClick={() => removeInclude(inc)} style={{
+                      background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer',
+                      fontSize: '0.85rem', padding: '0', lineHeight: 1, marginLeft: '0.1rem',
+                    }}>×</button>
+                  </span>
+                );
+              })}
             </div>
           )}
-
-          {/* Custom include input */}
-          <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.6rem' }}>
-            <input
-              type="text"
-              value={customInclude}
-              onInput={(e) => setCustomInclude((e.target as HTMLInputElement).value)}
-              onKeyDown={(e) => e.key === 'Enter' && addCustom()}
-              placeholder="custom.provider.com"
-              style={{ flex: 1, padding: '0.4rem 0.6rem', fontSize: '0.82rem', border: '1px solid #d1d5db', borderRadius: '6px', fontFamily: 'monospace' }}
-            />
-            <button onClick={addCustom} disabled={!customInclude.trim()} style={{ ...s.secondaryBtn, padding: '0.4rem 0.75rem', fontSize: '0.8rem', opacity: customInclude.trim() ? 1 : 0.5 }}>
-              Add
-            </button>
-          </div>
 
           {/* Qualifier toggle */}
           <div style={{ marginTop: '0.6rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
@@ -410,16 +478,43 @@ function SpfStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext:
             </label>
           </div>
 
-          {/* Live preview */}
+          {/* Before / After comparison */}
           {previewRecord && (
             <div style={{ marginTop: '0.75rem' }}>
-              <p style={s.label}>
-                Preview
-                <span style={{ fontWeight: 400, textTransform: 'none' as const, marginLeft: '0.5rem', color: estimatedLookups > 9 ? '#dc2626' : estimatedLookups >= 8 ? '#d97706' : '#6b7280' }}>
-                  ~{estimatedLookups} / 10 lookups
-                </span>
-              </p>
-              <CodeBlock value={previewRecord} onCopy={() => copy(previewRecord)} copied={copied} />
+              {spf.record && hasChanges ? (
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                  <div>
+                    <p style={{ ...s.label, color: '#9ca3af' }}>Current DNS record</p>
+                    <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '6px', padding: '0.5rem', fontFamily: 'monospace', fontSize: '0.75rem', wordBreak: 'break-all' as const, color: '#991b1b' }}>
+                      {spf.record}
+                    </div>
+                    {spf.lookup_count !== null && (
+                      <p style={{ fontSize: '0.72rem', color: SEV_COLOR[sev], marginTop: '0.3rem' }}>
+                        {count} / 10 lookups
+                      </p>
+                    )}
+                  </div>
+                  <div>
+                    <p style={{ ...s.label, color: '#059669' }}>Proposed record</p>
+                    <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px', padding: '0.5rem', fontFamily: 'monospace', fontSize: '0.75rem', wordBreak: 'break-all' as const, color: '#166534' }}>
+                      {previewRecord}
+                    </div>
+                    <p style={{ fontSize: '0.72rem', color: estimatedLookups > 9 ? '#dc2626' : estimatedLookups >= 8 ? '#d97706' : '#059669', marginTop: '0.3rem' }}>
+                      ~{estimatedLookups} / 10 lookups
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <p style={s.label}>
+                    {spf.record && !hasChanges ? 'Current record' : 'Preview'}
+                    <span style={{ fontWeight: 400, textTransform: 'none' as const, marginLeft: '0.5rem', color: estimatedLookups > 9 ? '#dc2626' : estimatedLookups >= 8 ? '#d97706' : '#6b7280' }}>
+                      ~{estimatedLookups} / 10 lookups
+                    </span>
+                  </p>
+                  <CodeBlock value={previewRecord} onCopy={() => copy(previewRecord)} copied={copied} />
+                </div>
+              )}
               {estimatedLookups > 10 && (
                 <p style={{ ...s.body, color: '#dc2626', fontSize: '0.8rem', marginTop: '0.4rem' }}>
                   This exceeds the 10-lookup RFC limit. Consider removing providers you don't use, or enable SPF flattening after setup.
@@ -433,7 +528,7 @@ function SpfStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext:
             <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
               {cf_available && (
                 <button
-                  onClick={apply}
+                  onClick={() => apply()}
                   disabled={applying}
                   style={{ ...s.actionBtn, background: SEV_COLOR[sev === 'good' ? 'info' : sev], opacity: applying ? 0.6 : 1 }}
                 >
