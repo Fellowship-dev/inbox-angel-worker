@@ -107,10 +107,14 @@ export function App() {
   useEffect(() => {
     if (!hasKey) return;
     fetch('/api/auth/status')
-      .then(r => r.json() as Promise<{ custom_domain?: string | null }>)
+      .then(r => r.json() as Promise<{ custom_domain?: string | null; has_domain?: boolean }>)
       .then(s => {
         if (s.custom_domain && window.location.hostname !== s.custom_domain) {
           setCustomDomain(s.custom_domain);
+        }
+        // No domain configured — redirect to setup wizard
+        if (s.has_domain === false && !window.location.hash.includes('/setup')) {
+          window.location.hash = '#/setup';
         }
       })
       .catch(() => {});
