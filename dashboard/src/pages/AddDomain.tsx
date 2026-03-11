@@ -79,10 +79,10 @@ export function AddDomain({ onUnauthorized }: Props) {
       <div style={s.page}>
         <a href="#/" style={s.back}>← Back</a>
         <div style={s.hero}>
-          <h1 style={s.title}>Protect a domain</h1>
+          <h1 style={s.title}>Add a domain</h1>
           <p style={s.subtitle}>
-            We'll give you one DNS record to add. Takes 2 minutes. Your email delivery stays
-            completely unaffected — we start in monitor-only mode.
+            Enter the domain you send email from. We'll check its current security
+            settings and guide you through the setup.
           </p>
         </div>
         <form onSubmit={submit} style={s.form}>
@@ -103,15 +103,16 @@ export function AddDomain({ onUnauthorized }: Props) {
         </form>
         <div style={s.reassurance}>
           <div style={s.reassuranceItem}>
-            <strong>Zero risk to email delivery.</strong> p=none means you're only observing.
-            No email gets blocked.
+            <strong>No impact on your email.</strong> We start in observation mode —
+            nothing changes about how your email is delivered.
           </div>
           <div style={s.reassuranceItem}>
-            <strong>One record, not ten.</strong> Just a single TXT record on your DNS.
+            <strong>Guided setup.</strong> We'll walk you through each step and
+            can apply DNS changes automatically if your domain is on Cloudflare.
           </div>
           <div style={s.reassuranceItem}>
-            <strong>We'll tell you what to do next.</strong> Once reports come in, the
-            dashboard shows you exactly when it's safe to tighten your policy.
+            <strong>Clear next steps.</strong> Once data starts coming in, the
+            dashboard tells you exactly what to do and when it's safe.
           </div>
         </div>
       </div>

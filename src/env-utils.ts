@@ -123,6 +123,11 @@ export async function enrichEnv(env: Env, db?: D1Database): Promise<Env> {
     }
   }
 
+  // 5. Propagate resolved values onto env so downstream code doesn't need cache awareness
+  if (_baseDomainCache) env.BASE_DOMAIN = _baseDomainCache;
+  if (_reportsDomainCache) env.REPORTS_DOMAIN = _reportsDomainCache;
+  if (_fromEmailCache) env.FROM_EMAIL = _fromEmailCache;
+
   return env;
 }
 

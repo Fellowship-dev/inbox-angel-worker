@@ -166,8 +166,8 @@ function DomainStep({ onDomainSet }: { onDomainSet: (domainId: number) => void }
     <div>
       <h2 style={s.stepTitle}>What's your domain?</h2>
       <p style={{ ...s.body, marginTop: '0.5rem' }}>
-        Enter the domain you want to monitor. InboxAngel will check its SPF, DKIM, and DMARC
-        records and collect aggregate reports.
+        Enter the domain you send email from. We'll check its current security
+        settings and walk you through any improvements.
       </p>
       <div style={{ marginTop: '1rem' }}>
         <input

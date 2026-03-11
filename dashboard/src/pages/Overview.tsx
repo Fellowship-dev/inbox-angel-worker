@@ -100,7 +100,7 @@ export function Overview({ onUnauthorized }: Props) {
           }
 
           let wizardComplete = 0;
-          const wizardTotal = 4;
+          const wizardTotal = 5;
           if (wizardResults[i].status === 'fulfilled') {
             const ws = wizardResults[i].value as WizardState;
             wizardComplete = Object.values(ws).filter(v => v === 'complete').length;
@@ -145,8 +145,8 @@ export function Overview({ onUnauthorized }: Props) {
 
       {!loading && !error && rows.length === 0 && (
         <div style={styles.empty}>
-          <p style={{ margin: '0 0 1rem', color: '#6b7280' }}>No domains yet. Add your first one to start monitoring.</p>
-          <a href="#/add" style={styles.primaryBtn}>Protect your first domain →</a>
+          <p style={{ margin: '0 0 1rem', color: '#6b7280' }}>No domains yet. Add your first one to get started.</p>
+          <a href="#/setup" style={styles.primaryBtn}>Get started →</a>
         </div>
       )}
 
@@ -168,11 +168,11 @@ export function Overview({ onUnauthorized }: Props) {
               </span>
               {setupIncomplete && (
                 <a
-                  href={`#/domains/${domain.id}/setup/1`}
+                  href={`#/domains/${domain.id}/setup/2`}
                   onClick={(e: Event) => e.stopPropagation()}
                   style={{ fontSize: '0.7rem', color: '#d97706', textDecoration: 'none' }}
                 >
-                  {wizardComplete}/{wizardTotal} setup steps — Continue setup →
+                  {wizardComplete}/{wizardTotal} steps — Continue setup →
                 </a>
               )}
             </div>
