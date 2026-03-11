@@ -24,6 +24,7 @@
 	//      • Account Settings : Read
 	//      • Email Sending    : Edit   ← send from Email Workers
 	//    Zone scope (All zones):
+	//      • Zone                : Read  ← auto-discover zone ID + account ID at runtime
 	//      • Email Routing Rules : Edit  ← enable routing, set catch-all rule
 	//      • DNS                 : Edit  ← MX records for subdomain + per-customer TXT records
 	//      • Workers Routes      : Edit
