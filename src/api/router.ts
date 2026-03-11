@@ -744,15 +744,20 @@ async function _handleApi(
     return err('not found', 404);
   }
 
-  // Resolve session: env API_KEY override → users table session → legacy auto-key
+  // Resolve session: env API_KEY match → users table session → legacy auto-key
   const requestKey = request.headers.get('x-api-key') ?? '';
-  let effectiveApiKey: string | undefined = env.API_KEY;
+  let effectiveApiKey: string | undefined;
   let userBySession: Awaited<ReturnType<typeof getUserBySession>> = null;
-  if (!effectiveApiKey) {
+  if (env.API_KEY && requestKey === env.API_KEY) {
+    // Direct API_KEY match (curl/automation)
+    effectiveApiKey = env.API_KEY;
+  } else {
+    // Try session-based auth (dashboard login)
     userBySession = await getUserBySession(env.DB!, requestKey);
     if (userBySession) {
       effectiveApiKey = requestKey;
-    } else {
+    } else if (!env.API_KEY) {
+      // Fall back to auto-generated key only when no env API_KEY is set
       effectiveApiKey = (await getSetting(env.DB!, 'auto_api_key'))?.value;
     }
   }
@@ -1150,7 +1155,7 @@ async function _handleApi(
       const flatConfig = await getSpfFlattenConfig(env.DB, id);
       if (flatConfig?.enabled) return err('SPF flattening is active for this domain. Disable it before editing the SPF record manually.', 409);
 
-      const body = await parseBody<{ record?: string }>(request);
+      const body = await parseBody<{ record?: string; confirm_overwrite?: boolean }>(request);
       if (!body.record) return err('record content is required', 400);
       if (!body.record.startsWith('v=spf1')) return err('SPF record must start with v=spf1', 400);
       if (!body.record.includes('all')) return err('SPF record must end with an all mechanism', 400);
@@ -1166,6 +1171,11 @@ async function _handleApi(
       ).then(r => r.json() as Promise<{ result?: { id: string; content: string }[] }>);
       const existingSpf = searchData.result?.find(r => r.content.startsWith('v=spf1'));
       const existingId = existingSpf?.id;
+
+      // Safety: require explicit confirmation when overwriting an existing record
+      if (existingSpf && !body.confirm_overwrite) {
+        return json({ ok: false, needs_confirmation: true, existing_record: existingSpf.content, proposed_record: body.record }, 200);
+      }
 
       const cfRes = existingId
         ? await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records/${existingId}`, {

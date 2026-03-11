@@ -298,8 +298,8 @@ export async function applyDmarc(domainId: number, record: string): Promise<{ ok
   return res.json();
 }
 
-export async function applySpf(domainId: number, record: string): Promise<{ ok: boolean; record: string; created: boolean }> {
-  const res = await apiFetch(`/api/domains/${domainId}/apply-spf`, { method: 'POST', body: JSON.stringify({ record }) });
+export async function applySpf(domainId: number, record: string, confirmOverwrite = false): Promise<{ ok: boolean; record?: string; created?: boolean; needs_confirmation?: boolean; existing_record?: string; proposed_record?: string }> {
+  const res = await apiFetch(`/api/domains/${domainId}/apply-spf`, { method: 'POST', body: JSON.stringify({ record, confirm_overwrite: confirmOverwrite }) });
   if (!res.ok) await throwApiError(res);
   return res.json();
 }

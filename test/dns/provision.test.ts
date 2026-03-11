@@ -1,13 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock getZoneId — it reads from a module-level cache that tests never populate
+// Mock env-utils — reads from module-level caches that tests never populate
 vi.mock('../../src/env-utils', async (importOriginal) => {
   const actual = await importOriginal() as Record<string, unknown>;
-  return { ...actual, getZoneId: vi.fn().mockReturnValue('zone-abc') };
+  return {
+    ...actual,
+    getZoneId: vi.fn().mockReturnValue('zone-abc'),
+    reportsDomain: vi.fn().mockReturnValue('reports.inboxangel.io'),
+  };
 });
 
 import { provisionDomain, deprovisionDomain, DnsProvisionError } from '../../src/dns/provision';
-import { getZoneId } from '../../src/env-utils';
+import { getZoneId, reportsDomain } from '../../src/env-utils';
 
 const ENV = {
   CLOUDFLARE_API_TOKEN: 'test-token',
@@ -92,11 +96,13 @@ describe('provisionDomain', () => {
 
   it('returns manual result when CF credentials are not configured', async () => {
     vi.mocked(getZoneId).mockReturnValue(undefined);
+    vi.mocked(reportsDomain).mockReturnValue('r.io');
     const bare = { CLOUDFLARE_API_TOKEN: '', CLOUDFLARE_ZONE_ID: '', REPORTS_DOMAIN: 'r.io' };
     const result = await provisionDomain(bare, 'acme.com');
     expect(result.manual).toBe(true);
     expect(result.recordId).toBeNull();
     expect(result.recordName).toBe('acme.com._report._dmarc.r.io');
+    vi.mocked(reportsDomain).mockReturnValue('reports.inboxangel.io');
   });
 });
 

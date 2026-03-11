@@ -58,7 +58,9 @@ export async function handleFreeCheck(
   const reportText = formatCheckReport(fromEmail, summary, auth, dns);
 
   // 5. Send reply
-  const replyFrom = `InboxAngel <${derivedFromEmail(env) ?? 'noreply@inboxangel.io'}>`;
+  const resolvedFrom = derivedFromEmail();
+  if (!resolvedFrom) throw new Error('FROM_EMAIL not configured — complete the setup wizard first');
+  const replyFrom = `InboxAngel <${resolvedFrom}>`;
   const subject = `Email security check — ${domain}`;
   await message.reply(buildMimeReply(replyFrom, fromEmail, subject, reportText));
 

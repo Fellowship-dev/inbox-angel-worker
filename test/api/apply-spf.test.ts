@@ -143,11 +143,25 @@ describe('POST /api/domains/:id/apply-spf', () => {
     expect(payload.content).toBe('v=spf1 include:_spf.google.com ~all');
   });
 
-  it('patches existing SPF record', async () => {
+  it('returns needs_confirmation when existing record found and confirm_overwrite not set', async () => {
+    mockFetch([{ id: 'existing-spf-id', content: 'v=spf1 include:old.com ~all' }]);
+    const env = makeEnv();
+    const res = await handleApi(
+      req('POST', '/api/domains/1/apply-spf', { record: 'v=spf1 include:_spf.google.com ~all' }),
+      env, ctx,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.ok).toBe(false);
+    expect(body.needs_confirmation).toBe(true);
+    expect(body.existing_record).toBe('v=spf1 include:old.com ~all');
+  });
+
+  it('patches existing SPF record with confirm_overwrite', async () => {
     const fetchMock = mockFetch([{ id: 'existing-spf-id', content: 'v=spf1 include:old.com ~all' }]);
     const env = makeEnv();
     const res = await handleApi(
-      req('POST', '/api/domains/1/apply-spf', { record: 'v=spf1 include:_spf.google.com include:sendgrid.net ~all' }),
+      req('POST', '/api/domains/1/apply-spf', { record: 'v=spf1 include:_spf.google.com include:sendgrid.net ~all', confirm_overwrite: true }),
       env, ctx,
     );
     expect(res.status).toBe(200);
@@ -264,7 +278,7 @@ describe('POST /api/domains/:id/apply-spf', () => {
     ]);
     const env = makeEnv();
     const res = await handleApi(
-      req('POST', '/api/domains/1/apply-spf', { record: 'v=spf1 include:_spf.google.com ~all' }),
+      req('POST', '/api/domains/1/apply-spf', { record: 'v=spf1 include:_spf.google.com ~all', confirm_overwrite: true }),
       env, ctx,
     );
     expect(res.status).toBe(200);

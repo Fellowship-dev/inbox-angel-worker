@@ -263,12 +263,24 @@ function SpfStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext:
     setTimeout(() => setCopied(false), 1500);
   };
 
-  const apply = async () => {
+  const apply = async (confirmOverwrite = false) => {
     if (!previewRecord) return;
     setApplying(true);
     setApplyError(null);
     try {
-      await applySpf(status.domain_id, previewRecord);
+      const result = await applySpf(status.domain_id, previewRecord, confirmOverwrite);
+      if (result.needs_confirmation) {
+        // Existing record differs — ask user to confirm overwrite
+        const ok = window.confirm(
+          `An existing SPF record was found in DNS:\n\n${result.existing_record}\n\nReplace it with:\n\n${result.proposed_record}\n\nProceed?`
+        );
+        if (ok) {
+          await apply(true);
+        } else {
+          setApplying(false);
+        }
+        return;
+      }
       setApplied(true);
     } catch (e: any) {
       setApplyError(e.message ?? 'Failed to apply');
