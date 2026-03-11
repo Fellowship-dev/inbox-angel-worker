@@ -2,7 +2,7 @@
 // Mocks all I/O: message.raw stream, D1, and the module collaborators.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Env } from '../../src/index';
-import type { Customer, Domain } from '../../src/db/types';
+import type { Domain } from '../../src/db/types';
 import type { AggregateReport } from '../../src/dmarc/types';
 
 // ── Module mocks ──────────────────────────────────────────────
@@ -16,7 +16,7 @@ vi.mock('../../src/email/mime-extract', () => ({
 }));
 
 vi.mock('../../src/email/resolve-customer', () => ({
-  resolveCustomer: vi.fn(),
+  resolveDomain: vi.fn(),
 }));
 
 vi.mock('../../src/dmarc/parse-email', () => ({
@@ -38,18 +38,8 @@ import * as storeReportMod from '../../src/dmarc/store-report';
 
 // ── Fixtures ──────────────────────────────────────────────────
 
-const CUSTOMER: Customer = {
-  id: 'org_abc123',
-  name: 'Acme Corp',
-  email: 'admin@acme.com',
-  plan: 'starter',
-  created_at: 1700000000,
-  updated_at: 1700000000,
-};
-
 const DOMAIN: Domain = {
   id: 1,
-  customer_id: 'org_abc123',
   domain: 'acme.com',
   rua_address: 'rua@reports.inboxangel.io',
   dmarc_policy: 'reject',
@@ -57,6 +47,8 @@ const DOMAIN: Domain = {
   spf_record: null,
   dkim_configured: 1,
   auth_record_provisioned: 1,
+  dns_record_id: null,
+  spf_lookup_count: null,
   created_at: 1700000000,
   updated_at: 1700000000,
 };
@@ -90,7 +82,7 @@ function makeMessage(overrides: Partial<{
 }> = {}): ForwardableEmailMessage {
   return {
     from: overrides.from ?? 'dmarc-reports@google.com',
-    to: overrides.to ?? 'org_abc123@reports.inboxangel.com',
+    to: overrides.to ?? 'rua@reports.inboxangel.com',
     headers: new Headers(),
     raw: overrides.raw ?? makeStream(),
     rawSize: 100,
@@ -115,7 +107,7 @@ function makeEnv(): Env {
 beforeEach(() => {
   // Happy-path defaults — individual tests override as needed
   vi.mocked(mimeExtract.extractAttachmentBytes).mockResolvedValue(new Uint8Array([0x1f, 0x8b]));
-  vi.mocked(resolveCustomerMod.resolveCustomer).mockResolvedValue({ customer: CUSTOMER, domain: DOMAIN });
+  vi.mocked(resolveCustomerMod.resolveDomain).mockResolvedValue(DOMAIN);
   vi.mocked(parseEmailMod.parseDmarcEmail).mockResolvedValue(REPORT);
   vi.mocked(storeReportMod.storeReport).mockResolvedValue({ stored: true, reportId: 42 });
 });
@@ -133,11 +125,11 @@ describe('handleDmarcReport — happy path', () => {
     expect(mimeExtract.extractAttachmentBytes).toHaveBeenCalledWith(raw);
   });
 
-  it('calls resolveCustomer with env.DB and the policy_domain from the report', async () => {
+  it('calls resolveDomain with env.DB and the policy_domain from the report', async () => {
     const env = makeEnv();
     await handleDmarcReport(makeMessage(), env);
 
-    expect(resolveCustomerMod.resolveCustomer).toHaveBeenCalledWith(env.DB, 'acme.com');
+    expect(resolveCustomerMod.resolveDomain).toHaveBeenCalledWith(env.DB, 'acme.com');
   });
 
   it('calls parseDmarcEmail with the extracted bytes', async () => {
@@ -150,14 +142,13 @@ describe('handleDmarcReport — happy path', () => {
     expect(parseEmailMod.parseDmarcEmail).toHaveBeenCalledWith(fakeBytes, false, expect.anything());
   });
 
-  it('calls storeReport with correct customer + domain ids', async () => {
+  it('calls storeReport with correct domain id', async () => {
     const env = makeEnv();
     await handleDmarcReport(makeMessage(), env);
 
-    const [calledDb, calledCustomerId, calledDomainId, calledReport] =
+    const [calledDb, calledDomainId, calledReport] =
       vi.mocked(storeReportMod.storeReport).mock.calls[0];
     expect(calledDb).toBe(env.DB);
-    expect(calledCustomerId).toBe('org_abc123');
     expect(calledDomainId).toBe(1);
     expect(calledReport).toBe(REPORT);
   });
@@ -176,7 +167,7 @@ describe('handleDmarcReport — happy path', () => {
     const env = makeEnv();
     await handleDmarcReport(makeMessage(), env);
 
-    const [, , , , rawXml] = vi.mocked(storeReportMod.storeReport).mock.calls[0];
+    const [, , , rawXml] = vi.mocked(storeReportMod.storeReport).mock.calls[0];
     expect(rawXml).toBeNull();
   });
 
@@ -188,7 +179,7 @@ describe('handleDmarcReport — happy path', () => {
     const env = makeEnv();
     await handleDmarcReport(makeMessage(), env);
 
-    const [, , , , rawXml] = vi.mocked(storeReportMod.storeReport).mock.calls[0];
+    const [, , , rawXml] = vi.mocked(storeReportMod.storeReport).mock.calls[0];
     expect(rawXml).toBe(xml);
   });
 
@@ -229,7 +220,7 @@ describe('handleDmarcReport — error paths', () => {
   });
 
   it('calls setReject when policy_domain is not registered', async () => {
-    vi.mocked(resolveCustomerMod.resolveCustomer).mockResolvedValue(null);
+    vi.mocked(resolveCustomerMod.resolveDomain).mockResolvedValue(null);
     const message = makeMessage();
     await handleDmarcReport(message, makeEnv());
 
@@ -240,7 +231,7 @@ describe('handleDmarcReport — error paths', () => {
   });
 
   it('calls parseDmarcEmail but not storeReport when policy_domain is unknown', async () => {
-    vi.mocked(resolveCustomerMod.resolveCustomer).mockResolvedValue(null);
+    vi.mocked(resolveCustomerMod.resolveDomain).mockResolvedValue(null);
     await handleDmarcReport(makeMessage(), makeEnv());
 
     expect(parseEmailMod.parseDmarcEmail).toHaveBeenCalled();

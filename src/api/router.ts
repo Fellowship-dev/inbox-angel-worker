@@ -43,14 +43,14 @@
 //   POST   /api/team/invite                   — send invite link (admin only)
 //   DELETE /api/team/:id                      — remove team member (admin only)
 //
-// Self-hosted lazy init: if BASE_DOMAIN env var is set and no customer exists yet,
-// the first authenticated request auto-provisions customer + domain (no bootstrap call needed).
+// Self-hosted lazy init: if BASE_DOMAIN env var is set and no domain exists yet,
+// the first authenticated request auto-provisions the domain (no bootstrap call needed).
 
 import { Env } from '../index';
 import { requireAuth, AuthError } from './auth';
 import { version } from '../../package.json';
 import {
-  getDomainsByCustomer,
+  getAllDomains,
   getDomainById,
   insertDomain,
   updateDomainDmarcPolicy,
@@ -58,7 +58,6 @@ import {
   getRecentReports,
   getCheckResultByToken,
   insertMonitorSubscription,
-  upsertCustomer,
   getDomainStats,
   getTopFailingSources,
   getReportSourcesByDate,
@@ -154,12 +153,12 @@ async function parseBody<T>(request: Request): Promise<T> {
 
 // ── Route handlers ────────────────────────────────────────────
 
-async function getDomains(env: Env, customerId: string): Promise<Response> {
-  const { results } = await getDomainsByCustomer(env.DB, customerId);
+async function getDomainsHandler(env: Env): Promise<Response> {
+  const { results } = await getAllDomains(env.DB);
   return json({ domains: results });
 }
 
-async function addDomain(request: Request, env: Env, customerId: string, userEmail?: string, ctx?: ExecutionContext, actorId?: string): Promise<Response> {
+async function addDomain(request: Request, env: Env, userEmail?: string, ctx?: ExecutionContext, actorId?: string): Promise<Response> {
   const body = await parseBody<{ domain?: string }>(request);
   if (!body.domain || typeof body.domain !== 'string') {
     return err('domain is required', 400);
@@ -182,7 +181,7 @@ async function addDomain(request: Request, env: Env, customerId: string, userEma
   // Insert domain row — no DNS writes here; all DNS changes require explicit user action
   let domainId: number;
   try {
-    const result = await insertDomain(env.DB, { customer_id: customerId, domain, rua_address: ruaAddress });
+    const result = await insertDomain(env.DB, { domain, rua_address: ruaAddress });
     domainId = result.meta.last_row_id as number;
   } catch (e: any) {
     if (e?.message?.includes('UNIQUE')) return err('domain already registered', 409);
@@ -192,7 +191,6 @@ async function addDomain(request: Request, env: Env, customerId: string, userEma
   track(env, { event: 'domain.add' }); // fire-and-forget, non-blocking
 
   logAudit(env.DB!, {
-    customer_id: customerId,
     actor_id: actorId ?? null, actor_email: userEmail ?? null, actor_type: 'user',
     action: 'domain.add',
     resource_type: 'domain', resource_id: String(domainId), resource_name: domain,
@@ -237,20 +235,18 @@ async function addDomain(request: Request, env: Env, customerId: string, userEma
   }, 201);
 }
 
-async function deleteDomain(env: Env, customerId: string, domainId: string, actor?: { id?: string; email?: string }, ctx?: ExecutionContext): Promise<Response> {
+async function deleteDomain(env: Env, domainId: string, actor?: { id?: string; email?: string }, ctx?: ExecutionContext): Promise<Response> {
   const id = parseInt(domainId, 10);
   if (isNaN(id)) return err('invalid domain id', 400);
 
-  // Verify ownership and fetch the DNS record ID in one query
   const domain = await getDomainById(env.DB, id);
-  if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+  if (!domain) return err('domain not found', 404);
 
-  await env.DB.prepare('DELETE FROM domains WHERE id = ? AND customer_id = ?')
-    .bind(id, customerId)
+  await env.DB.prepare('DELETE FROM domains WHERE id = ?')
+    .bind(id)
     .run();
 
   logAudit(env.DB!, {
-    customer_id: customerId,
     actor_id: actor?.id ?? null, actor_email: actor?.email ?? null, actor_type: 'user',
     action: 'domain.remove',
     resource_type: 'domain', resource_id: String(id), resource_name: domain.domain,
@@ -262,7 +258,6 @@ async function deleteDomain(env: Env, customerId: string, domainId: string, acto
     const rdomain = reportsDomain(env);
     const recordName = rdomain ? `${domain.domain}._report._dmarc.${rdomain}` : domain.dns_record_id;
     logAudit(env.DB!, {
-      customer_id: customerId,
       actor_id: actor?.id ?? null, actor_email: actor?.email ?? null, actor_type: 'user',
       action: 'dns.delete',
       resource_type: 'dns_record', resource_id: domain.dns_record_id, resource_name: recordName,
@@ -276,19 +271,19 @@ async function deleteDomain(env: Env, customerId: string, domainId: string, acto
   return new Response(null, { status: 204 });
 }
 
-async function getReports(env: Env, customerId: string, url: URL): Promise<Response> {
+async function getReports(env: Env, url: URL): Promise<Response> {
   const limit = Math.min(parseInt(url.searchParams.get('limit') ?? '30', 10), 100);
-  const { results } = await getRecentReports(env.DB, customerId, limit);
+  const { results } = await getRecentReports(env.DB, limit);
   return json({ reports: results });
 }
 
-async function getReport(env: Env, customerId: string, reportId: string): Promise<Response> {
+async function getReport(env: Env, reportId: string): Promise<Response> {
   const id = parseInt(reportId, 10);
   if (isNaN(id)) return err('invalid report id', 400);
 
   const report = await env.DB
-    .prepare('SELECT r.*, d.domain FROM aggregate_reports r JOIN domains d ON d.id = r.domain_id WHERE r.id = ? AND r.customer_id = ?')
-    .bind(id, customerId)
+    .prepare('SELECT r.*, d.domain FROM aggregate_reports r JOIN domains d ON d.id = r.domain_id WHERE r.id = ?')
+    .bind(id)
     .first();
 
   if (!report) return err('report not found', 404);
@@ -302,16 +297,13 @@ async function getReport(env: Env, customerId: string, reportId: string): Promis
 }
 
 // ── Self-hosted lazy init ──────────────────────────────────────
-// When BASE_DOMAIN env var is set and no customer/domain exists yet,
+// When BASE_DOMAIN env var is set and no domain exists yet,
 // auto-provision on the first authenticated request — no bootstrap API call needed.
 
-async function ensureCustomerExists(env: Env, _customerId: string): Promise<void> {
-  if (!env.BASE_DOMAIN) return; // hosted/multi-tenant mode — nothing to auto-init
+async function ensureFirstDomainExists(env: Env): Promise<void> {
+  if (!env.BASE_DOMAIN) return; // no auto-init without BASE_DOMAIN
 
-  // Always use BASE_DOMAIN as the stable customer ID for single-tenant mode.
-  // This prevents customer records from fragmenting across session/key changes.
-  const customerId = env.BASE_DOMAIN;
-  const { results } = await getDomainsByCustomer(env.DB, customerId);
+  const { results } = await getAllDomains(env.DB);
   if (results.length > 0) return; // already set up
 
   const domain = env.BASE_DOMAIN.toLowerCase().trim();
@@ -325,21 +317,11 @@ async function ensureCustomerExists(env: Env, _customerId: string): Promise<void
     return;
   }
 
-  // Use the admin user's name/email for the customer record — they exist by this point
-  const admin = await env.DB!.prepare(`SELECT name, email FROM users WHERE role = 'admin' LIMIT 1`).first<{ name: string; email: string }>();
-  await upsertCustomer(env.DB, {
-    id: customerId,
-    name: admin?.name?.trim() || 'Self-hosted',
-    email: admin?.email?.trim() || fromEmail(env),
-    plan: 'self-hosted',
-  });
-
   const ruaAddress = `rua@${rd}`;
   // Insert domain row only — no DNS writes. The onboarding wizard handles all DNS provisioning
   // with explicit user action (button press) per issue #8 consent rules.
-  await insertDomain(env.DB, { customer_id: customerId, domain, rua_address: ruaAddress });
+  await insertDomain(env.DB, { domain, rua_address: ruaAddress });
   console.log(`[init] Domain ${domain} registered. DNS setup deferred to onboarding wizard.`);
-
 }
 
 async function verifyTurnstile(token: string, secret: string, ip: string): Promise<boolean> {
@@ -356,10 +338,9 @@ async function verifyTurnstile(token: string, secret: string, ip: string): Promi
   }
 }
 
-async function getCheckResults(env: Env, customerId: string): Promise<Response> {
-  // Check results are anonymous — only expose if the customer matches their own domain
-  // For now: return the last 20 results for domains owned by this customer
-  const { results: domains } = await getDomainsByCustomer(env.DB, customerId);
+async function getCheckResults(env: Env): Promise<Response> {
+  // Return the last 20 results for monitored domains
+  const { results: domains } = await getAllDomains(env.DB);
   const domainNames = domains.map(d => d.domain);
 
   if (domainNames.length === 0) return json({ results: [] });
@@ -373,12 +354,12 @@ async function getCheckResults(env: Env, customerId: string): Promise<Response> 
   return json({ results });
 }
 
-async function getDomainStatsSummary(env: Env, customerId: string, domainId: string, url: URL): Promise<Response> {
+async function getDomainStatsSummary(env: Env, domainId: string, url: URL): Promise<Response> {
   const id = parseInt(domainId, 10);
   if (isNaN(id)) return err('invalid domain id', 400);
 
   const domain = await getDomainById(env.DB, id);
-  if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+  if (!domain) return err('domain not found', 404);
 
   const rawDays = parseInt(url.searchParams.get('days') ?? '30', 10);
   const days = Math.min(isNaN(rawDays) ? 30 : rawDays, 90);
@@ -388,12 +369,12 @@ async function getDomainStatsSummary(env: Env, customerId: string, domainId: str
   return json({ domain: domain.domain, days, stats: results });
 }
 
-async function exportDomainData(env: Env, customerId: string, domainId: string): Promise<Response> {
+async function exportDomainData(env: Env, domainId: string): Promise<Response> {
   const id = parseInt(domainId, 10);
   if (isNaN(id)) return err('invalid domain id', 400);
 
   const domain = await getDomainById(env.DB, id);
-  if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+  if (!domain) return err('domain not found', 404);
 
   const { results } = await getDomainExportData(env.DB, id);
 
@@ -414,7 +395,7 @@ async function exportDomainData(env: Env, customerId: string, domainId: string):
   });
 }
 
-async function getDomainReportByDate(env: Env, customerId: string, domainId: string, url: URL): Promise<Response> {
+async function getDomainReportByDate(env: Env, domainId: string, url: URL): Promise<Response> {
   const id = parseInt(domainId, 10);
   if (isNaN(id)) return err('invalid domain id', 400);
 
@@ -422,7 +403,7 @@ async function getDomainReportByDate(env: Env, customerId: string, domainId: str
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return err('date param required (YYYY-MM-DD)', 400);
 
   const domain = await getDomainById(env.DB, id);
-  if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+  if (!domain) return err('domain not found', 404);
 
   const [summary, { results: sources }] = await Promise.all([
     getDayReportSummary(env.DB, id, date),
@@ -432,12 +413,12 @@ async function getDomainReportByDate(env: Env, customerId: string, domainId: str
   return json({ date, domain: domain.domain, summary: summary ?? { total: 0, passed: 0, failed: 0 }, sources });
 }
 
-async function getDomainSources(env: Env, customerId: string, domainId: string, url: URL): Promise<Response> {
+async function getDomainSources(env: Env, domainId: string, url: URL): Promise<Response> {
   const id = parseInt(domainId, 10);
   if (isNaN(id)) return err('invalid domain id', 400);
 
   const domain = await getDomainById(env.DB, id);
-  if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+  if (!domain) return err('domain not found', 404);
 
   const rawDays = parseInt(url.searchParams.get('days') ?? '7', 10);
   const days = Math.min(isNaN(rawDays) ? 7 : rawDays, 90);
@@ -602,7 +583,6 @@ async function _handleApi(
     if (body.telemetry !== undefined) await setSetting(env.DB!, 'telemetry_opted_in', body.telemetry ? 'true' : 'false');
 
     logAudit(env.DB!, {
-      customer_id: env.BASE_DOMAIN ?? 'system',
       actor_id: id, actor_email: email, actor_type: 'user',
       action: 'auth.setup',
       resource_type: 'user', resource_id: id, resource_name: email,
@@ -649,7 +629,6 @@ async function _handleApi(
     const token = crypto.randomUUID();
     await setUserSession(env.DB!, user.id, token);
     logAudit(env.DB!, {
-      customer_id: env.BASE_DOMAIN ?? 'system',
       actor_id: user.id, actor_email: user.email, actor_type: 'user',
       action: 'auth.login',
       resource_type: 'user', resource_id: user.id, resource_name: user.email,
@@ -665,8 +644,7 @@ async function _handleApi(
     if (user) {
       await setUserSession(env.DB!, user.id, null);
       logAudit(env.DB!, {
-        customer_id: env.BASE_DOMAIN ?? 'system',
-        actor_id: user.id, actor_email: user.email, actor_type: 'user',
+          actor_id: user.id, actor_email: user.email, actor_type: 'user',
         action: 'auth.logout',
         resource_type: 'user', resource_id: user.id, resource_name: user.email,
       }, ctx);
@@ -686,8 +664,7 @@ async function _handleApi(
       const expiresAt = Math.floor(Date.now() / 1000) + 3600; // 1 hour
       await insertPasswordResetToken(env.DB!, token, user.id, expiresAt);
       logAudit(env.DB!, {
-        customer_id: env.BASE_DOMAIN ?? 'system',
-        actor_id: user.id, actor_email: user.email, actor_type: 'user',
+          actor_id: user.id, actor_email: user.email, actor_type: 'user',
         action: 'auth.password_reset',
         resource_type: 'user', resource_id: user.id, resource_name: user.email,
         meta: { phase: 'requested' },
@@ -733,7 +710,6 @@ async function _handleApi(
     await setUserSession(env.DB!, resetToken.user_id, sessionToken);
     await markResetTokenUsed(env.DB!, body.token);
     logAudit(env.DB!, {
-      customer_id: env.BASE_DOMAIN ?? 'system',
       actor_id: resetToken.user_id, actor_type: 'user',
       action: 'auth.password_reset',
       resource_type: 'user', resource_id: resetToken.user_id,
@@ -773,7 +749,6 @@ async function _handleApi(
     await setUserSession(env.DB!, id, token);
     await markInviteUsed(env.DB!, invite.token);
     logAudit(env.DB!, {
-      customer_id: env.BASE_DOMAIN ?? 'system',
       actor_id: id, actor_email: invite.email, actor_type: 'user',
       action: 'auth.invite_accepted',
       resource_type: 'user', resource_id: id, resource_name: invite.email,
@@ -809,47 +784,42 @@ async function _handleApi(
     }
   }
 
-  let customerId: string;
   try {
-    const ctx = await requireAuth(request, { ...env, API_KEY: effectiveApiKey });
-    // In single-tenant mode use BASE_DOMAIN as stable ID regardless of session user
-    customerId = (env.BASE_DOMAIN && !env.AUTH0_DOMAIN)
-      ? env.BASE_DOMAIN
-      : ctx.customerId;
-    debug(env, 'auth.ok', { method, path, customerId, mode: env.AUTH0_DOMAIN ? 'jwt' : 'api-key' });
+    await requireAuth(request, { ...env, API_KEY: effectiveApiKey });
+    debug(env, 'auth.ok', { method, path, mode: env.AUTH0_DOMAIN ? 'jwt' : 'api-key' });
   } catch (e) {
     debug(env, 'auth.fail', { method, path, error: e instanceof Error ? e.message : String(e) });
     if (e instanceof AuthError) return err(e.message, e.status);
     return err('authentication error', 401);
   }
 
-  // Self-hosted lazy init — no-op in hosted mode (BASE_DOMAIN unset)
-  await ensureCustomerExists(env, customerId);
+  // Self-hosted lazy init — no-op when BASE_DOMAIN is unset
+  await ensureFirstDomainExists(env);
 
   try {
     // GET /api/domains
     if (path === '/api/domains' && method === 'GET') {
-      return await getDomains(env, customerId);
+      return await getDomainsHandler(env);
     }
     // POST /api/domains
     if (path === '/api/domains' && method === 'POST') {
       const userEmail = userBySession?.email;
-      return await addDomain(request, env, customerId, userEmail, ctx, userBySession?.id);
+      return await addDomain(request, env, userEmail, ctx, userBySession?.id);
     }
     // GET /api/domains/:id/stats
     const domainStatsMatch = path.match(/^\/api\/domains\/([^/]+)\/stats$/);
     if (domainStatsMatch && method === 'GET') {
-      return await getDomainStatsSummary(env, customerId, domainStatsMatch[1], url);
+      return await getDomainStatsSummary(env, domainStatsMatch[1], url);
     }
     // GET /api/domains/:id/reports?date=YYYY-MM-DD
     const domainReportsMatch = path.match(/^\/api\/domains\/([^/]+)\/reports$/);
     if (domainReportsMatch && method === 'GET') {
-      return await getDomainReportByDate(env, customerId, domainReportsMatch[1], url);
+      return await getDomainReportByDate(env, domainReportsMatch[1], url);
     }
     // GET /api/domains/:id/sources
     const domainSourcesMatch = path.match(/^\/api\/domains\/([^/]+)\/sources$/);
     if (domainSourcesMatch && method === 'GET') {
-      return await getDomainSources(env, customerId, domainSourcesMatch[1], url);
+      return await getDomainSources(env, domainSourcesMatch[1], url);
     }
     // GET /api/domains/:id/explore?days=30
     const exploreMatch = path.match(/^\/api\/domains\/([^/]+)\/explore$/);
@@ -857,7 +827,7 @@ async function _handleApi(
       const id = parseInt(exploreMatch[1], 10);
       if (isNaN(id)) return err('invalid domain id', 400);
       const domain = await getDomainById(env.DB, id);
-      if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+      if (!domain) return err('domain not found', 404);
       const rawDays = parseInt(url.searchParams.get('days') ?? '30', 10);
       const days = Math.min(isNaN(rawDays) ? 30 : rawDays, 90);
       const since = Math.floor(Date.now() / 1000) - days * 86400;
@@ -870,7 +840,7 @@ async function _handleApi(
       const id = parseInt(anomaliesMatch[1], 10);
       if (isNaN(id)) return err('invalid domain id', 400);
       const domain = await getDomainById(env.DB, id);
-      if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+      if (!domain) return err('domain not found', 404);
       const rawDays = parseInt(url.searchParams.get('days') ?? '30', 10);
       const days = Math.min(isNaN(rawDays) ? 30 : rawDays, 90);
       const since = Math.floor(Date.now() / 1000) - days * 86400;
@@ -880,7 +850,7 @@ async function _handleApi(
     // GET /api/domains/:id/export — CSV download (requires normal session/API key auth)
     const exportMatch = path.match(/^\/api\/domains\/([^/]+)\/export$/);
     if (exportMatch && method === 'GET') {
-      return await exportDomainData(env, customerId, exportMatch[1]);
+      return await exportDomainData(env, exportMatch[1]);
     }
     // GET /api/domains/:id/dns-check — check if user has added the _dmarc TXT record
     const dnsCheckMatch = path.match(/^\/api\/domains\/([^/]+)\/dns-check$/);
@@ -888,7 +858,7 @@ async function _handleApi(
       const id = parseInt(dnsCheckMatch[1], 10);
       if (isNaN(id)) return err('invalid domain id', 400);
       const domain = await getDomainById(env.DB, id);
-      if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+      if (!domain) return err('domain not found', 404);
 
       try {
         const dohUrl = `https://cloudflare-dns.com/dns-query?name=_dmarc.${domain.domain}&type=TXT`;
@@ -912,7 +882,7 @@ async function _handleApi(
       const id = parseInt(dmarcPatchMatch[1], 10);
       if (isNaN(id)) return err('invalid domain id', 400);
       const domain = await getDomainById(env.DB, id);
-      if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+      if (!domain) return err('domain not found', 404);
       if (!domain.dns_record_id) return err('domain is not CF-managed — update DNS manually', 400);
       if (!env.CLOUDFLARE_API_TOKEN) return err('Cloudflare credentials not configured', 400);
 
@@ -937,8 +907,7 @@ async function _handleApi(
       await updateDomainDmarcPolicy(env.DB, id, policy);
 
       logAudit(env.DB, {
-        customer_id: customerId,
-        actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
+          actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
         action: 'domain.dmarc_mode_change',
         resource_type: 'domain', resource_id: String(id), resource_name: domain.domain,
         before_value: { policy: prevPolicy },
@@ -955,7 +924,7 @@ async function _handleApi(
       const id = parseInt(onboardingMatch[1], 10);
       if (isNaN(id)) return err('invalid domain id', 400);
       const domain = await getDomainById(env.DB, id);
-      if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+      if (!domain) return err('domain not found', 404);
 
       const rd = reportsDomain(env);
       const DKIM_SELECTORS = ['google', 'selector1', 'selector2', 'mail', 'default', 'k1', 'dkim', 'mandrill', 'mailjet', 'sendgrid', 'smtp', 'pm', 'brevo', 'resend', 'mxroute', 'zoho'];
@@ -1074,8 +1043,7 @@ async function _handleApi(
       }
       if (result.status !== 'skipped') {
         logAudit(env.DB!, {
-          customer_id: customerId,
-          actor_id: userBySession?.id ?? null, actor_email: userBySession?.email ?? null, actor_type: 'user',
+              actor_id: userBySession?.id ?? null, actor_email: userBySession?.email ?? null, actor_type: 'user',
           action: 'setup.email_routing',
           resource_type: 'email_routing', resource_id: rd, resource_name: rd,
           meta: { routing_status: result.status },
@@ -1091,7 +1059,7 @@ async function _handleApi(
       const id = parseInt(applyDmarcMatch[1], 10);
       if (isNaN(id)) return err('invalid domain id', 400);
       const domain = await getDomainById(env.DB, id);
-      if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+      if (!domain) return err('domain not found', 404);
       if (!env.CLOUDFLARE_API_TOKEN || !getZoneId()) return err('Cloudflare credentials not configured', 400);
 
       const body = await parseBody<{ record?: string }>(request);
@@ -1124,8 +1092,7 @@ async function _handleApi(
       if (!cfData.success) return err(cfData.errors?.map(e => e.message).join(', ') ?? 'CF DNS update failed', 500);
 
       logAudit(env.DB!, {
-        customer_id: customerId,
-        actor_id: userBySession?.id ?? null, actor_email: userBySession?.email ?? null, actor_type: 'user',
+          actor_id: userBySession?.id ?? null, actor_email: userBySession?.email ?? null, actor_type: 'user',
         action: existingId ? 'dns.update' : 'dns.create',
         resource_type: 'dns_record', resource_id: cfData.result?.id ?? '', resource_name: recordName,
         after_value: { type: 'TXT', name: recordName, content: body.record },
@@ -1157,8 +1124,7 @@ async function _handleApi(
 
       await setSetting(env.DB!, 'custom_domain', hostname);
       logAudit(env.DB!, {
-        customer_id: customerId,
-        actor_id: userBySession?.id ?? null, actor_email: userBySession?.email ?? null, actor_type: 'user',
+          actor_id: userBySession?.id ?? null, actor_email: userBySession?.email ?? null, actor_type: 'user',
         action: 'setup.custom_domain',
         resource_type: 'custom_domain', resource_id: hostname, resource_name: hostname,
       }, ctx);
@@ -1172,7 +1138,7 @@ async function _handleApi(
       const id = parseInt(wizardGetMatch[1], 10);
       if (isNaN(id)) return err('invalid domain id', 400);
       const domain = await getDomainById(env.DB, id);
-      if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+      if (!domain) return err('domain not found', 404);
 
       const raw = await getSetting(env.DB, `wizard_state_${id}`);
       const state = raw ? JSON.parse(raw.value) : { spf: 'not_started', dkim: 'not_started', dmarc: 'not_started', routing: 'not_started' };
@@ -1185,7 +1151,7 @@ async function _handleApi(
       const id = parseInt(wizardPutMatch[1], 10);
       if (isNaN(id)) return err('invalid domain id', 400);
       const domain = await getDomainById(env.DB, id);
-      if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+      if (!domain) return err('domain not found', 404);
 
       const body = await parseBody<Record<string, string>>(request);
       const validSteps = ['spf', 'dkim', 'dmarc', 'routing'];
@@ -1208,27 +1174,27 @@ async function _handleApi(
     // DELETE /api/domains/:id
     const domainDeleteMatch = path.match(/^\/api\/domains\/([^/]+)$/);
     if (domainDeleteMatch && method === 'DELETE') {
-      return await deleteDomain(env, customerId, domainDeleteMatch[1], { id: userBySession?.id, email: userBySession?.email }, ctx);
+      return await deleteDomain(env, domainDeleteMatch[1], { id: userBySession?.id, email: userBySession?.email }, ctx);
     }
     // GET /api/reports
     if (path === '/api/reports' && method === 'GET') {
-      return await getReports(env, customerId, url);
+      return await getReports(env, url);
     }
     // GET /api/reports/:id
     const reportMatch = path.match(/^\/api\/reports\/([^/]+)$/);
     if (reportMatch && method === 'GET') {
-      return await getReport(env, customerId, reportMatch[1]);
+      return await getReport(env, reportMatch[1]);
     }
     // GET /api/check-results
     if (path === '/api/check-results' && method === 'GET') {
-      return await getCheckResults(env, customerId);
+      return await getCheckResults(env);
     }
 
     // GET /api/domains/:id/monitor-subs — list monitoring subscriptions for a domain
     const monitorSubsMatch = path.match(/^\/api\/domains\/(\d+)\/monitor-subs$/);
     if (monitorSubsMatch && method === 'GET') {
       const domain = await getDomainById(env.DB, parseInt(monitorSubsMatch[1], 10));
-      if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+      if (!domain) return err('domain not found', 404);
       const { results } = await getMonitorSubsByDomain(env.DB, domain.domain);
       return json({ subs: results });
     }
@@ -1281,8 +1247,7 @@ async function _handleApi(
         expires_at: expiresAt,
       });
       logAudit(env.DB, {
-        customer_id: customerId,
-        actor_id: actor.id, actor_email: actor.email, actor_type: 'user',
+          actor_id: actor.id, actor_email: actor.email, actor_type: 'user',
         action: 'auth.invite_sent',
         resource_type: 'user', resource_name: inviteEmail,
         after_value: { email: inviteEmail, role: inviteRole, invited_by: actor.email },
@@ -1300,8 +1265,7 @@ async function _handleApi(
         ?? await env.DB.prepare('SELECT id, email, name, role FROM users WHERE id = ?').bind(teamMemberMatch[1]).first<{ id: string; email: string; name: string; role: string }>().catch(() => null);
       await deleteUser(env.DB, teamMemberMatch[1]);
       logAudit(env.DB, {
-        customer_id: customerId,
-        actor_id: actor.id, actor_email: actor.email, actor_type: 'user',
+          actor_id: actor.id, actor_email: actor.email, actor_type: 'user',
         action: 'team.member_removed',
         resource_type: 'user', resource_id: teamMemberMatch[1], resource_name: removed?.email ?? teamMemberMatch[1],
         before_value: removed ? { email: removed.email, name: removed.name, role: removed.role } : null,
@@ -1315,7 +1279,7 @@ async function _handleApi(
       const id = parseInt(spfFlattenMatch[1], 10);
       if (isNaN(id)) return err('invalid domain id', 400);
       const domain = await getDomainById(env.DB, id);
-      if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+      if (!domain) return err('domain not found', 404);
 
       const available = !!(env.CLOUDFLARE_API_TOKEN && getZoneId());
 
@@ -1363,8 +1327,7 @@ async function _handleApi(
         await updateSpfFlattenResult(env.DB, id, result.flattened_record, result.ip_count, result.cf_record_id);
 
         logAudit(env.DB, {
-          customer_id: customerId,
-          actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
+              actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
           action: 'spf_flatten.enable',
           resource_type: 'domain', resource_id: String(id), resource_name: domain.domain,
           before_value: { spf_record: result.canonical_record },
@@ -1372,8 +1335,7 @@ async function _handleApi(
         }, ctx);
         if (result.cf_record_id) {
           logAudit(env.DB, {
-            customer_id: customerId,
-            actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
+                  actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
             action: 'dns.update',
             resource_type: 'dns_record', resource_id: result.cf_record_id, resource_name: `TXT _spf.${domain.domain}`,
             before_value: { content: result.canonical_record },
@@ -1403,8 +1365,7 @@ async function _handleApi(
         }
 
         logAudit(env.DB, {
-          customer_id: customerId,
-          actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
+              actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
           action: 'spf_flatten.disable',
           resource_type: 'domain', resource_id: String(id), resource_name: domain.domain,
           before_value: { spf_record: config.flattened_record ?? config.canonical_record },
@@ -1422,7 +1383,7 @@ async function _handleApi(
       const id = parseInt(mtaStsMatch[1], 10);
       if (isNaN(id)) return err('invalid domain id', 400);
       const domain = await getDomainById(env.DB, id);
-      if (!domain || domain.customer_id !== customerId) return err('domain not found', 404);
+      if (!domain) return err('domain not found', 404);
 
       if (method === 'GET') {
         const config = await getMtaStsConfig(env.DB, id);
@@ -1456,16 +1417,15 @@ async function _handleApi(
           });
           const rd = reportsDomain(env)!;
           logAudit(env.DB, {
-            customer_id: customerId,
-            actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
+                  actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
             action: 'mta_sts.enable',
             resource_type: 'domain', resource_id: String(id), resource_name: domain.domain,
             after_value: { mode: result.mode, mx_hosts: result.mx_hosts, policy_id: result.policy_id },
           }, ctx);
           // Log each DNS record created
-          logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.create', resource_type: 'dns_record', resource_id: result.mta_sts_record_id, resource_name: `_mta-sts.${domain.domain}`, after_value: { type: 'TXT', name: `_mta-sts.${domain.domain}`, content: `v=STSv1; id=${result.policy_id}` } }, ctx);
-          logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.create', resource_type: 'dns_record', resource_id: result.tls_rpt_record_id, resource_name: `_smtp._tls.${domain.domain}`, after_value: { type: 'TXT', name: `_smtp._tls.${domain.domain}`, content: `v=TLSRPTv1; rua=mailto:tls-rpt@${rd}` } }, ctx);
-          logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.create', resource_type: 'dns_record', resource_id: result.cname_record_id, resource_name: `mta-sts.${domain.domain}`, after_value: { type: 'CNAME', name: `mta-sts.${domain.domain}`, proxied: true } }, ctx);
+          logAudit(env.DB, { actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.create', resource_type: 'dns_record', resource_id: result.mta_sts_record_id, resource_name: `_mta-sts.${domain.domain}`, after_value: { type: 'TXT', name: `_mta-sts.${domain.domain}`, content: `v=STSv1; id=${result.policy_id}` } }, ctx);
+          logAudit(env.DB, { actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.create', resource_type: 'dns_record', resource_id: result.tls_rpt_record_id, resource_name: `_smtp._tls.${domain.domain}`, after_value: { type: 'TXT', name: `_smtp._tls.${domain.domain}`, content: `v=TLSRPTv1; rua=mailto:tls-rpt@${rd}` } }, ctx);
+          logAudit(env.DB, { actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.create', resource_type: 'dns_record', resource_id: result.cname_record_id, resource_name: `mta-sts.${domain.domain}`, after_value: { type: 'CNAME', name: `mta-sts.${domain.domain}`, proxied: true } }, ctx);
           track(env, { event: 'mta_sts.enable' }); // fire-and-forget
           return json({ ok: true, mode: result.mode, mx_hosts: result.mx_hosts });
         } catch (e: any) {
@@ -1487,15 +1447,14 @@ async function _handleApi(
           await updateMtaStsTxtRecord(config.mta_sts_record_id!, newPolicyId, patchEnv);
           await updateMtaStsMode(env.DB, id, body.mode, newPolicyId);
           logAudit(env.DB, {
-            customer_id: customerId,
-            actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
+                  actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
             action: 'mta_sts.mode_change',
             resource_type: 'domain', resource_id: String(id), resource_name: domain.domain,
             before_value: { mode: config.mode, policy_id: config.policy_id },
             after_value: { mode: body.mode, policy_id: newPolicyId },
           }, ctx);
           if (config.mta_sts_record_id) {
-            logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.update', resource_type: 'dns_record', resource_id: config.mta_sts_record_id, resource_name: `_mta-sts.${domain.domain}`, before_value: { content: `v=STSv1; id=${config.policy_id}` }, after_value: { content: `v=STSv1; id=${newPolicyId}` } }, ctx);
+            logAudit(env.DB, { actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.update', resource_type: 'dns_record', resource_id: config.mta_sts_record_id, resource_name: `_mta-sts.${domain.domain}`, before_value: { content: `v=STSv1; id=${config.policy_id}` }, after_value: { content: `v=STSv1; id=${newPolicyId}` } }, ctx);
           }
           track(env, { event: 'mta_sts.mode_change', from: config.mode, to: body.mode }); // fire-and-forget
           return json({ ok: true, mode: body.mode, policy_id: newPolicyId });
@@ -1509,8 +1468,7 @@ async function _handleApi(
           await updateMtaStsTxtRecord(config.mta_sts_record_id!, newPolicyId, patchEnv);
           await updateMtaStsMxHosts(env.DB, id, mxHosts.join(','), newPolicyId);
           logAudit(env.DB, {
-            customer_id: customerId,
-            actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
+                  actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
             action: 'mta_sts.mx_refresh',
             resource_type: 'domain', resource_id: String(id), resource_name: domain.domain,
             before_value: { mx_hosts: oldMxHosts, policy_id: config.policy_id },
@@ -1543,17 +1501,16 @@ async function _handleApi(
         }
 
         logAudit(env.DB, {
-          customer_id: customerId,
-          actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
+              actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user',
           action: 'mta_sts.disable',
           resource_type: 'domain', resource_id: String(id), resource_name: domain.domain,
           before_value: { mode: config.mode, mx_hosts: config.mx_hosts?.split(',').filter(Boolean) ?? [], policy_id: config.policy_id },
         }, ctx);
         // Log each DNS record deleted
         const rd = reportsDomain(env);
-        if (config.mta_sts_record_id) logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.delete', resource_type: 'dns_record', resource_id: config.mta_sts_record_id, resource_name: `_mta-sts.${domain.domain}`, before_value: { type: 'TXT', name: `_mta-sts.${domain.domain}`, content: `v=STSv1; id=${config.policy_id}` } }, ctx);
-        if (config.tls_rpt_record_id && rd) logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.delete', resource_type: 'dns_record', resource_id: config.tls_rpt_record_id, resource_name: `_smtp._tls.${domain.domain}`, before_value: { type: 'TXT', name: `_smtp._tls.${domain.domain}`, content: `v=TLSRPTv1; rua=mailto:tls-rpt@${rd}` } }, ctx);
-        if (config.cname_record_id) logAudit(env.DB, { customer_id: customerId, actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.delete', resource_type: 'dns_record', resource_id: config.cname_record_id, resource_name: `mta-sts.${domain.domain}`, before_value: { type: 'CNAME', name: `mta-sts.${domain.domain}` } }, ctx);
+        if (config.mta_sts_record_id) logAudit(env.DB, { actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.delete', resource_type: 'dns_record', resource_id: config.mta_sts_record_id, resource_name: `_mta-sts.${domain.domain}`, before_value: { type: 'TXT', name: `_mta-sts.${domain.domain}`, content: `v=STSv1; id=${config.policy_id}` } }, ctx);
+        if (config.tls_rpt_record_id && rd) logAudit(env.DB, { actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.delete', resource_type: 'dns_record', resource_id: config.tls_rpt_record_id, resource_name: `_smtp._tls.${domain.domain}`, before_value: { type: 'TXT', name: `_smtp._tls.${domain.domain}`, content: `v=TLSRPTv1; rua=mailto:tls-rpt@${rd}` } }, ctx);
+        if (config.cname_record_id) logAudit(env.DB, { actor_id: userBySession?.id, actor_email: userBySession?.email, actor_type: 'user', action: 'dns.delete', resource_type: 'dns_record', resource_id: config.cname_record_id, resource_name: `mta-sts.${domain.domain}`, before_value: { type: 'CNAME', name: `mta-sts.${domain.domain}` } }, ctx);
         track(env, { event: 'mta_sts.disable' }); // fire-and-forget
         await deleteMtaStsConfig(env.DB, id);
         return new Response(null, { status: 204 });
@@ -1578,7 +1535,7 @@ async function _handleApi(
       if (!actor || actor.role !== 'admin') return err('admin required', 403);
       const page  = parseInt(url.searchParams.get('page')  ?? '1',  10);
       const limit = parseInt(url.searchParams.get('limit') ?? '50', 10);
-      const { results } = await getAuditLog(env.DB, customerId, {
+      const { results } = await getAuditLog(env.DB, {
         page:      isNaN(page)  ? 1  : page,
         limit:     isNaN(limit) ? 50 : limit,
         action:    url.searchParams.get('action')    ?? undefined,

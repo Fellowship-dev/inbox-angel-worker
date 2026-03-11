@@ -126,7 +126,7 @@ function makeDb(lastRowId = 42): MockDb {
 describe('storeReport', () => {
   it('returns stored=true and reportId on first insert', async () => {
     const { db } = makeDb(42);
-    const result = await storeReport(db, 'org_abc', 1, makeReport());
+    const result = await storeReport(db, 1, makeReport());
 
     expect(result.stored).toBe(true);
     expect(result.reportId).toBe(42);
@@ -134,7 +134,7 @@ describe('storeReport', () => {
 
   it('returns stored=false when INSERT OR IGNORE skips (last_row_id=0)', async () => {
     const { db } = makeDb(0); // 0 = ignored
-    const result = await storeReport(db, 'org_abc', 1, makeReport());
+    const result = await storeReport(db, 1, makeReport());
 
     expect(result.stored).toBe(false);
     expect(result.reportId).toBeUndefined();
@@ -142,7 +142,7 @@ describe('storeReport', () => {
 
   it('does not insert records when report was a duplicate', async () => {
     const { db, recordBatches } = makeDb(0);
-    await storeReport(db, 'org_abc', 1, makeReport());
+    await storeReport(db, 1, makeReport());
 
     expect(recordBatches).toHaveLength(0);
   });
@@ -166,7 +166,7 @@ describe('storeReport', () => {
       }),
     } as unknown as D1Database;
 
-    await storeReport(mockDb, 'org_abc', 1, report);
+    await storeReport(mockDb, 1, report);
     // batch called once with 2 statements (one per record)
     expect(batchCalls).toHaveLength(1);
     expect(batchCalls[0]).toHaveLength(2);
@@ -184,7 +184,7 @@ describe('storeReport', () => {
     } as unknown as D1Database;
 
     const report = makeReport({ records: [] });
-    const result = await storeReport(mockDb, 'org_abc', 1, report);
+    const result = await storeReport(mockDb, 1, report);
 
     expect(result.stored).toBe(true);
     expect(batchCalls).toHaveLength(0);
@@ -211,11 +211,11 @@ describe('storeReport', () => {
         makeRecord({ count: 3 }),
       ],
     });
-    await storeReport(mockDb, 'org_abc', 1, report);
+    await storeReport(mockDb, 1, report);
 
-    // total_count is the 7th bind arg: (customer_id, domain_id, org_name, report_id, date_begin, date_end, total_count, pass_count, fail_count, raw_xml)
+    // total_count is the 6th bind arg: (domain_id, org_name, report_id, date_begin, date_end, total_count, pass_count, fail_count, raw_xml)
     const args = captured[0];
-    const totalCount = args[6];
+    const totalCount = args[5];
     expect(totalCount).toBe(18); // 10+5+3
   });
 
@@ -238,13 +238,13 @@ describe('storeReport', () => {
         makeRecord({ count: 3,  dkimResult: 'fail', spfResult: 'pass' }), // passes (via SPF)
       ],
     });
-    await storeReport(mockDb, 'org_abc', 1, report);
+    await storeReport(mockDb, 1, report);
 
     const args = captured[0];
-    // (customer_id[0], domain_id[1], org_name[2], report_id[3], date_begin[4], date_end[5], total_count[6], pass_count[7], fail_count[8], raw_xml[9])
-    expect(args[6]).toBe(18);  // total
-    expect(args[7]).toBe(13);  // pass: 10+3
-    expect(args[8]).toBe(5);   // fail: 5
+    // (domain_id[0], org_name[1], report_id[2], date_begin[3], date_end[4], total_count[5], pass_count[6], fail_count[7], raw_xml[8])
+    expect(args[5]).toBe(18);  // total
+    expect(args[6]).toBe(13);  // pass: 10+3
+    expect(args[7]).toBe(5);   // fail: 5
   });
 
   it('converts ISO date strings to unix timestamps', async () => {
@@ -263,11 +263,11 @@ describe('storeReport', () => {
       beginDate: '2024-06-13T00:00:00Z',
       endDate:   '2024-06-13T23:59:59Z',
     });
-    await storeReport(mockDb, 'org_abc', 1, report);
+    await storeReport(mockDb, 1, report);
 
     const args = captured[0];
-    expect(args[4]).toBe(1718236800); // 2024-06-13 00:00:00 UTC
-    expect(args[5]).toBe(1718323199); // 2024-06-13 23:59:59 UTC
+    expect(args[3]).toBe(1718236800); // 2024-06-13 00:00:00 UTC
+    expect(args[4]).toBe(1718323199); // 2024-06-13 23:59:59 UTC
   });
 
   it('passes rawXml to the insert', async () => {
@@ -282,8 +282,8 @@ describe('storeReport', () => {
       batch: vi.fn().mockResolvedValue([]),
     } as unknown as D1Database;
 
-    await storeReport(mockDb, 'org_abc', 1, makeReport(), '<xml>raw</xml>');
-    expect(captured[0][9]).toBe('<xml>raw</xml>');
+    await storeReport(mockDb, 1, makeReport(), '<xml>raw</xml>');
+    expect(captured[0][8]).toBe('<xml>raw</xml>');
   });
 
   it('passes null rawXml when not provided', async () => {
@@ -298,8 +298,8 @@ describe('storeReport', () => {
       batch: vi.fn().mockResolvedValue([]),
     } as unknown as D1Database;
 
-    await storeReport(mockDb, 'org_abc', 1, makeReport());
-    expect(captured[0][9]).toBeNull();
+    await storeReport(mockDb, 1, makeReport());
+    expect(captured[0][8]).toBeNull();
   });
 
   it('maps record source_ip from source.ip', async () => {
@@ -315,10 +315,10 @@ describe('storeReport', () => {
     } as unknown as D1Database;
 
     const report = makeReport({ records: [makeRecord({ ip: '192.168.1.100' })] });
-    await storeReport(mockDb, 'org_abc', 1, report);
+    await storeReport(mockDb, 1, report);
 
-    // source_ip is the 3rd bind arg (report_id, customer_id, source_ip, ...)
-    expect(batchArgs[0][2]).toBe('192.168.1.100');
+    // source_ip is the 2nd bind arg (report_id, source_ip, ...)
+    expect(batchArgs[0][1]).toBe('192.168.1.100');
   });
 
   it('handles record with no DKIM auth result gracefully (null fields)', async () => {
@@ -338,10 +338,10 @@ describe('storeReport', () => {
       auth_results: { dkim: [], spf: [] }, // empty auth results
     };
     const report = makeReport({ records: [rec] });
-    await storeReport(mockDb, 'org_abc', 1, report);
+    await storeReport(mockDb, 1, report);
 
     // dkim_result and spf_result should be null (not crash)
-    expect(batchArgs[0][6]).toBeNull(); // dkim_result
-    expect(batchArgs[0][8]).toBeNull(); // spf_result
+    expect(batchArgs[0][4]).toBeNull(); // dkim_result
+    expect(batchArgs[0][6]).toBeNull(); // spf_result
   });
 });

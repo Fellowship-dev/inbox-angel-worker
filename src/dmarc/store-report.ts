@@ -39,15 +39,12 @@ function computeCounts(records: ParserRecord[]): {
 }
 
 // Maps a parser ReportRecord to a D1 report_records row.
-// Takes the D1 aggregate_reports.id (reportId) and customer_id for denormalization.
 function mapRecord(
   rec: ParserRecord,
   reportId: number,
-  customerId: string,
 ): Omit<DbRecord, 'id' | 'created_at'> {
   return {
     report_id: reportId,
-    customer_id: customerId,
     source_ip: rec.source.ip,
     count: rec.count,
     disposition: rec.policy_evaluated.disposition,
@@ -69,14 +66,12 @@ function mapRecord(
  * Inserts an aggregate report + its records into D1.
  *
  * @param db          D1Database binding
- * @param customerId  Auth0 org_id of the receiving customer
  * @param domainId    D1 domains.id for the monitored domain
  * @param report      Parsed AggregateReport from parseDmarcEmail()
  * @param rawXml      Original XML string to store for reprocessing (nullable)
  */
 export async function storeReport(
   db: D1Database,
-  customerId: string,
   domainId: number,
   report: AggregateReport,
   rawXml: string | null = null,
@@ -85,7 +80,6 @@ export async function storeReport(
   const meta = report.report_metadata;
 
   const insertResult = await insertAggregateReport(db, {
-    customer_id: customerId,
     domain_id:   domainId,
     org_name:    meta.org_name,
     report_id:   meta.report_id,
@@ -105,7 +99,7 @@ export async function storeReport(
   if (report.records.length > 0) {
     await insertReportRecords(
       db,
-      report.records.map(r => mapRecord(r, reportId, customerId)),
+      report.records.map(r => mapRecord(r, reportId)),
     );
   }
 

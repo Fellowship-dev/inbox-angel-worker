@@ -8,18 +8,8 @@ export type DmarcResult = 'pass' | 'fail' | 'none';
 export type OverallStatus = 'protected' | 'at_risk' | 'exposed';
 export type Disposition = 'none' | 'quarantine' | 'reject';
 
-export interface Customer {
-  id: string;
-  name: string;
-  email: string;
-  plan: Plan;
-  created_at: number;
-  updated_at: number;
-}
-
 export interface Domain {
   id: number;
-  customer_id: string;
   domain: string;
   rua_address: string;
   dmarc_policy: DmarcPolicy | null;
@@ -54,7 +44,6 @@ export interface CheckResult {
 
 export interface AggregateReport {
   id: number;
-  customer_id: string;
   domain_id: number;
   org_name: string;
   report_id: string;
@@ -84,7 +73,6 @@ export interface MonitorSubscription {
 export interface ReportRecord {
   id: number;
   report_id: number;
-  customer_id: string;
   source_ip: string;
   count: number;
   disposition: Disposition;
@@ -134,7 +122,6 @@ export interface MtaStsConfig {
 export interface TlsReport {
   id: number;
   domain_id: number;
-  customer_id: string;
   org_name: string;
   date_begin: number;
   date_end: number;

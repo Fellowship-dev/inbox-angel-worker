@@ -109,7 +109,6 @@ export async function handleTlsRptReport(
     try {
       await insertTlsReport(env.DB, {
         domain_id: domain.id,
-        customer_id: domain.customer_id,
         org_name: orgName,
         date_begin: dateBegin,
         date_end: dateEnd,

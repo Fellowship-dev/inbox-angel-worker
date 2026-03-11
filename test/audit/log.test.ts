@@ -99,7 +99,6 @@ describe('logAudit()', () => {
   it('writes an entry to the DB with correct fields', async () => {
     const db = makeMockDb();
     const entry: AuditEntry = {
-      customer_id: 'cust-1',
       actor_id: 'user-1',
       actor_email: 'user@test.com',
       actor_type: 'user',
@@ -119,20 +118,18 @@ describe('logAudit()', () => {
     const sql = db._calls[0].sql;
     expect(sql).toContain('INSERT INTO audit_log');
     const params = db._calls[0].params;
-    expect(params[0]).toBe('cust-1');        // customer_id
-    expect(params[1]).toBe('user-1');        // actor_id
-    expect(params[2]).toBe('user@test.com'); // actor_email
-    expect(params[3]).toBe('user');          // actor_type
-    expect(params[4]).toBe('domain.add');    // action
-    expect(params[5]).toBe('domain');        // resource_type
-    expect(params[6]).toBe('42');            // resource_id
-    expect(params[7]).toBe('example.com');   // resource_name
+    expect(params[0]).toBe('user-1');        // actor_id
+    expect(params[1]).toBe('user@test.com'); // actor_email
+    expect(params[2]).toBe('user');          // actor_type
+    expect(params[3]).toBe('domain.add');    // action
+    expect(params[4]).toBe('domain');        // resource_type
+    expect(params[5]).toBe('42');            // resource_id
+    expect(params[6]).toBe('example.com');   // resource_name
   });
 
   it('serializes before_value/after_value as JSON strings', async () => {
     const db = makeMockDb();
     const entry: AuditEntry = {
-      customer_id: 'cust-1',
       action: 'test.action',
       before_value: { old: true },
       after_value: { new: true, count: 5 },
@@ -142,8 +139,8 @@ describe('logAudit()', () => {
     await new Promise(r => setTimeout(r, 10));
 
     const params = db._calls[0].params;
-    expect(params[8]).toBe(JSON.stringify({ old: true }));     // before_value
-    expect(params[9]).toBe(JSON.stringify({ new: true, count: 5 })); // after_value
+    expect(params[7]).toBe(JSON.stringify({ old: true }));     // before_value
+    expect(params[8]).toBe(JSON.stringify({ new: true, count: 5 })); // after_value
   });
 
   it('does not throw on DB error (fire-and-forget)', async () => {
@@ -155,7 +152,6 @@ describe('logAudit()', () => {
     // Should not throw
     expect(() => {
       logAudit(db as unknown as D1Database, {
-        customer_id: 'cust-1',
         action: 'test.action',
       });
     }).not.toThrow();
@@ -173,14 +169,13 @@ describe('logAudit()', () => {
   it('sets actor_type default to user', async () => {
     const db = makeMockDb();
     logAudit(db as unknown as D1Database, {
-      customer_id: 'cust-1',
       action: 'test.action',
       // actor_type NOT provided — should default to 'user'
     });
     await new Promise(r => setTimeout(r, 10));
 
     const params = db._calls[0].params;
-    expect(params[3]).toBe('user'); // actor_type defaults to 'user'
+    expect(params[2]).toBe('user'); // actor_type defaults to 'user'
   });
 
   it('uses ctx.waitUntil when ctx is provided', () => {
@@ -188,7 +183,6 @@ describe('logAudit()', () => {
     const mockCtx = { waitUntil: vi.fn() } as unknown as ExecutionContext;
 
     logAudit(db as unknown as D1Database, {
-      customer_id: 'cust-1',
       action: 'test.action',
     }, mockCtx);
 
@@ -201,25 +195,24 @@ describe('logAudit()', () => {
 describe('getAuditLog()', () => {
   it('returns entries paginated', async () => {
     const mockEntries = [
-      { id: 1, customer_id: 'cust-1', action: 'domain.add', created_at: 1000 },
-      { id: 2, customer_id: 'cust-1', action: 'domain.remove', created_at: 2000 },
+      { id: 1, action: 'domain.add', created_at: 1000 },
+      { id: 2, action: 'domain.remove', created_at: 2000 },
     ];
     const db = makeMockDb();
     db._setAllResult({ results: mockEntries });
 
     // Import getAuditLog separately
     const { getAuditLog } = await import('../../src/db/queries');
-    const result = await getAuditLog(db as unknown as D1Database, 'cust-1', { page: 1, limit: 50 });
+    const result = await getAuditLog(db as unknown as D1Database, { page: 1, limit: 50 });
 
     expect(result.results).toEqual(mockEntries);
     expect(db.prepare).toHaveBeenCalledTimes(1);
     const sql = db._calls[0].sql;
     expect(sql).toContain('LIMIT ? OFFSET ?');
-    // params: customer_id, limit, offset
+    // params: limit, offset
     const params = db._calls[0].params;
-    expect(params[0]).toBe('cust-1');
-    expect(params[1]).toBe(50);  // limit
-    expect(params[2]).toBe(0);   // offset for page 1
+    expect(params[0]).toBe(50);  // limit
+    expect(params[1]).toBe(0);   // offset for page 1
   });
 
   it('filters by action prefix', async () => {
@@ -227,7 +220,7 @@ describe('getAuditLog()', () => {
     db._setAllResult({ results: [] });
 
     const { getAuditLog } = await import('../../src/db/queries');
-    await getAuditLog(db as unknown as D1Database, 'cust-1', { action: 'dns' });
+    await getAuditLog(db as unknown as D1Database, { action: 'dns' });
 
     const sql = db._calls[0].sql;
     expect(sql).toContain('action LIKE ?');
@@ -241,7 +234,7 @@ describe('getAuditLog()', () => {
     db._setAllResult({ results: [] });
 
     const { getAuditLog } = await import('../../src/db/queries');
-    await getAuditLog(db as unknown as D1Database, 'cust-1', { since: 1000, until: 2000 });
+    await getAuditLog(db as unknown as D1Database, { since: 1000, until: 2000 });
 
     const sql = db._calls[0].sql;
     expect(sql).toContain('created_at >= ?');
@@ -308,7 +301,7 @@ describe('GET /api/audit-log', () => {
 
   it('returns entries for admin user', async () => {
     const mockEntries = [
-      { id: 1, customer_id: 'org_test', action: 'domain.add', created_at: 1000 },
+      { id: 1, action: 'domain.add', created_at: 1000 },
     ];
     const db = makeMockDb();
     let callIdx = 0;
@@ -324,8 +317,6 @@ describe('GET /api/audit-log', () => {
             firstVal = { id: 'admin-1', email: 'admin@test.com', role: 'admin', session_token: 'test-key' };
           } else if (sql.includes('FROM settings')) {
             firstVal = { key: 'auto_api_key', value: 'test-key' };
-          } else if (sql.includes('FROM customers')) {
-            firstVal = { id: 'org_test' };
           }
           return {
             run: vi.fn().mockResolvedValue({ success: true, meta: { last_row_id: 1 } }),

@@ -20,7 +20,6 @@ const CF_API = 'https://api.cloudflare.com/client/v4';
 /** Optional audit context — pass to enable self-logging of DNS mutations. */
 export interface DnsAuditOpts {
   db: D1Database;
-  customer_id: string;
   actor_id?: string | null;
   actor_email?: string | null;
   actor_type?: 'user' | 'system';
@@ -105,7 +104,6 @@ export async function provisionDomain(
 
   if (audit) {
     logAudit(audit.db, {
-      customer_id: audit.customer_id,
       actor_id: audit.actor_id,
       actor_email: audit.actor_email,
       actor_type: audit.actor_type ?? 'user',
@@ -155,7 +153,6 @@ export async function deprovisionDomain(
 
   if (audit && (res.ok || res.status === 404)) {
     logAudit(audit.db, {
-      customer_id: audit.customer_id,
       actor_id: audit.actor_id,
       actor_email: audit.actor_email,
       actor_type: audit.actor_type ?? 'user',

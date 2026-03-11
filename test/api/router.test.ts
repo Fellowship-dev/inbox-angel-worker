@@ -36,8 +36,9 @@ function makeEnv(dbOverrides: Partial<{ prepare: any; batch: any }> = {}): Env {
           first: vi.fn().mockResolvedValue(null),
           all:   vi.fn().mockResolvedValue({ results: [] }),
         }),
-        // For direct prepare().first() calls (no bind), e.g. SELECT users in ensureCustomerExists
+        // For direct prepare().first() or prepare().all() calls (no bind)
         first: vi.fn().mockResolvedValue(null),
+        all:   vi.fn().mockResolvedValue({ results: [] }),
       }),
       batch: vi.fn().mockResolvedValue([]),
       ...dbOverrides,
@@ -190,6 +191,7 @@ describe('GET /api/domains', () => {
     const domain: Partial<Domain> = { id: 1, domain: 'acme.com', rua_address: 'x@reports.inboxangel.com' };
     const env = makeEnv();
     (env.DB.prepare as any).mockReturnValue({
+      all: vi.fn().mockResolvedValue({ results: [domain] }),
       bind: vi.fn().mockReturnValue({ all: vi.fn().mockResolvedValue({ results: [domain] }) }),
     });
     const res = await handleApi(req('GET', '/api/domains'), env, ctx);
@@ -200,15 +202,14 @@ describe('GET /api/domains', () => {
 });
 
 // ── POST /api/domains ─────────────────────────────────────────
-// addDomain flow: getDomainsByCustomer → provisionDomain (mocked) → insertDomain →
-// updateDomainDnsRecord (if recordId) → logAudit (fire-and-forget) → getDomainById
+// addDomain flow: insertDomain → logAudit (fire-and-forget) → getDomainById
 // Response shape: { domain: <domainRow>, rua_hint, auth_record }
 
 describe('POST /api/domains', () => {
   it('returns 201 with domain row and rua_hint', async () => {
-    const domainRow: Partial<Domain> = { id: 1, domain: 'acme.com', rua_address: 'rua@reports.inboxangel.io', customer_id: 'org_test' };
+    const domainRow: Partial<Domain> = { id: 1, domain: 'acme.com', rua_address: 'rua@reports.inboxangel.io'};
     const env = makeEnv();
-    // getDomainsByCustomer → empty (triggers email routing setup, no-op without CF creds)
+    // getAllDomains → empty at first
     // insertDomain, updateDomainDnsRecord, logAudit all use default mock
     // getDomainById needs to return the domain row
     (env.DB.prepare as any).mockReturnValue({
@@ -226,7 +227,7 @@ describe('POST /api/domains', () => {
   });
 
   it('lowercases and trims the domain', async () => {
-    const domainRow: Partial<Domain> = { id: 1, domain: 'acme.com', rua_address: 'rua@reports.inboxangel.io', customer_id: 'org_test' };
+    const domainRow: Partial<Domain> = { id: 1, domain: 'acme.com', rua_address: 'rua@reports.inboxangel.io'};
     const env = makeEnv();
     (env.DB.prepare as any).mockReturnValue({
       bind: vi.fn().mockReturnValue({
@@ -272,7 +273,7 @@ describe('POST /api/domains', () => {
   });
 
   it('uses fixed rua address rua@REPORTS_DOMAIN', async () => {
-    const domainRow: Partial<Domain> = { id: 1, domain: 'my-company.io', rua_address: 'rua@reports.inboxangel.io', customer_id: 'org_test' };
+    const domainRow: Partial<Domain> = { id: 1, domain: 'my-company.io', rua_address: 'rua@reports.inboxangel.io'};
     const env = makeEnv();
     (env.DB.prepare as any).mockReturnValue({
       bind: vi.fn().mockReturnValue({
@@ -287,7 +288,7 @@ describe('POST /api/domains', () => {
   });
 
   it('does not call provisionDomain on domain add (DNS deferred to wizard)', async () => {
-    const domainRow: Partial<Domain> = { id: 1, domain: 'acme.com', rua_address: 'rua@reports.inboxangel.io', customer_id: 'org_test' };
+    const domainRow: Partial<Domain> = { id: 1, domain: 'acme.com', rua_address: 'rua@reports.inboxangel.io'};
     const env = makeEnv();
     (env.DB.prepare as any).mockReturnValue({
       bind: vi.fn().mockReturnValue({
@@ -301,7 +302,7 @@ describe('POST /api/domains', () => {
   });
 
   it('includes auth_record in the 201 response', async () => {
-    const domainRow: Partial<Domain> = { id: 1, domain: 'acme.com', rua_address: 'rua@reports.inboxangel.io', customer_id: 'org_test' };
+    const domainRow: Partial<Domain> = { id: 1, domain: 'acme.com', rua_address: 'rua@reports.inboxangel.io'};
     const env = makeEnv();
     (env.DB.prepare as any).mockReturnValue({
       bind: vi.fn().mockReturnValue({
@@ -316,7 +317,7 @@ describe('POST /api/domains', () => {
   });
 
   it('always returns dns_instructions for manual setup (no auto-provisioning)', async () => {
-    const domainRow: Partial<Domain> = { id: 1, domain: 'acme.com', rua_address: 'rua@reports.inboxangel.io', customer_id: 'org_test' };
+    const domainRow: Partial<Domain> = { id: 1, domain: 'acme.com', rua_address: 'rua@reports.inboxangel.io'};
     const env = makeEnv();
     (env.DB.prepare as any).mockReturnValue({
       bind: vi.fn().mockReturnValue({
@@ -336,21 +337,17 @@ describe('POST /api/domains', () => {
 // ── Self-hosted lazy init ──────────────────────────────────────
 
 describe('BASE_DOMAIN lazy init', () => {
-  it('creates customer + domain DB rows on first authenticated request (no DNS writes)', async () => {
+  it('creates domain DB row on first authenticated request (no DNS writes)', async () => {
     const env = { ...makeEnv(), BASE_DOMAIN: 'myco.com' };
-    // ensureCustomerExists flow (no DNS provisioning):
-    // 1. getDomainsByCustomer → empty
-    // 2. SELECT admin user (direct prepare().first())
-    // 3. upsertCustomer
-    // 4. insertDomain
+    // ensureInitialized flow (no DNS provisioning):
+    // 1. getAllDomains → empty
+    // 2. insertDomain
     (env.DB.prepare as any)
-      .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ all: vi.fn().mockResolvedValue({ results: [] }) }) }) // getDomainsByCustomer
-      .mockReturnValueOnce({ first: vi.fn().mockResolvedValue({ name: 'Admin', email: 'admin@myco.com' }) }) // SELECT users (no bind)
-      .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ run: vi.fn().mockResolvedValue({ success: true }) }) }) // upsertCustomer
+      .mockReturnValueOnce({ all: vi.fn().mockResolvedValue({ results: [] }) }) // getAllDomains (no bind)
       .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ run: vi.fn().mockResolvedValue({ success: true, meta: { last_row_id: 1 } }) }) }); // insertDomain
-    // Actual handler: GET /api/domains → getDomainsByCustomer again
+    // Actual handler: GET /api/domains → getAllDomains again
     (env.DB.prepare as any).mockReturnValue({
-      bind: vi.fn().mockReturnValue({ all: vi.fn().mockResolvedValue({ results: [] }) }),
+      all: vi.fn().mockResolvedValue({ results: [] }),
     });
     const res = await handleApi(req('GET', '/api/domains'), env, ctx);
     expect(res.status).toBe(200);
@@ -369,7 +366,7 @@ describe('BASE_DOMAIN lazy init', () => {
 describe('DELETE /api/domains/:id', () => {
   it('returns 204 when domain is owned by customer', async () => {
     const env = makeEnv();
-    const domain: Partial<Domain> = { id: 5, domain: 'acme.com', customer_id: 'org_test', dns_record_id: null };
+    const domain: Partial<Domain> = { id: 5, domain: 'acme.com',  dns_record_id: null };
     (env.DB.prepare as any)
       .mockReturnValueOnce({ // getDomainById
         bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(domain) }),
@@ -381,23 +378,12 @@ describe('DELETE /api/domains/:id', () => {
 
   it('calls deprovisionDomain when dns_record_id is set', async () => {
     const env = makeEnv();
-    const domain: Partial<Domain> = { id: 5, domain: 'acme.com', customer_id: 'org_test', dns_record_id: 'cf-rec-abc' };
+    const domain: Partial<Domain> = { id: 5, domain: 'acme.com',  dns_record_id: 'cf-rec-abc' };
     (env.DB.prepare as any)
       .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(domain) }) });
     // DELETE + logAudit (x2) use the default mock
     await handleApi(req('DELETE', '/api/domains/5'), env, ctx);
     expect(dnsMod.deprovisionDomain).toHaveBeenCalledWith(expect.anything(), 'cf-rec-abc');
-  });
-
-  it('returns 404 when domain does not belong to customer', async () => {
-    // getDomainById returns a domain owned by someone else
-    const env = makeEnv();
-    const otherDomain: Partial<Domain> = { id: 99, domain: 'other.com', customer_id: 'org_other' };
-    (env.DB.prepare as any).mockReturnValueOnce({
-      bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(otherDomain) }),
-    });
-    const res = await handleApi(req('DELETE', '/api/domains/99'), env, ctx);
-    expect(res.status).toBe(404);
   });
 
   it('returns 404 when domain not found', async () => {
@@ -417,7 +403,7 @@ describe('DELETE /api/domains/:id', () => {
 describe('GET /api/domains/:id/stats', () => {
   it('returns stats for owned domain', async () => {
     const env = makeEnv();
-    const domain: Partial<Domain> = { id: 1, domain: 'acme.com', customer_id: 'org_test' };
+    const domain: Partial<Domain> = { id: 1, domain: 'acme.com' };
     const stats = [{ day: '2026-03-01', total: 100, passed: 95, failed: 5 }];
     (env.DB.prepare as any)
       .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(domain) }) })
@@ -430,16 +416,6 @@ describe('GET /api/domains/:id/stats', () => {
     expect(body.days).toBe(30);
   });
 
-  it('returns 404 when domain belongs to another customer', async () => {
-    const env = makeEnv();
-    const other: Partial<Domain> = { id: 1, domain: 'acme.com', customer_id: 'org_other' };
-    (env.DB.prepare as any).mockReturnValueOnce({
-      bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(other) }),
-    });
-    const res = await handleApi(req('GET', '/api/domains/1/stats'), env, ctx);
-    expect(res.status).toBe(404);
-  });
-
   it('returns 400 for non-numeric domain id', async () => {
     const res = await handleApi(req('GET', '/api/domains/abc/stats'), makeEnv(), ctx);
     expect(res.status).toBe(400);
@@ -447,7 +423,7 @@ describe('GET /api/domains/:id/stats', () => {
 
   it('defaults to 30 days and caps at 90', async () => {
     const env = makeEnv();
-    const domain: Partial<Domain> = { id: 1, domain: 'acme.com', customer_id: 'org_test' };
+    const domain: Partial<Domain> = { id: 1, domain: 'acme.com' };
     (env.DB.prepare as any)
       .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(domain) }) })
       .mockReturnValue({ bind: vi.fn().mockReturnValue({ all: vi.fn().mockResolvedValue({ results: [] }) }) });
@@ -472,8 +448,8 @@ describe('GET /api/reports', () => {
     const bindMock = vi.fn().mockReturnValue({ all: vi.fn().mockResolvedValue({ results: [] }) });
     (env.DB.prepare as any).mockReturnValue({ bind: bindMock });
     await handleApi(req('GET', '/api/reports?limit=999'), env, ctx);
-    // Second bind arg is the limit
-    const limitArg = bindMock.mock.calls[0][1];
+    // First (only) bind arg is the capped limit
+    const limitArg = bindMock.mock.calls[0][0];
     expect(limitArg).toBe(100);
   });
 });
@@ -493,7 +469,7 @@ describe('GET /api/reports/:id', () => {
 
   it('returns report + records when found', async () => {
     const env = makeEnv();
-    const report = { id: 1, customer_id: 'org_test', domain: 'acme.com' };
+    const report = { id: 1,  domain: 'acme.com' };
     (env.DB.prepare as any)
       .mockReturnValueOnce({ // aggregate_reports query
         bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(report) }),
@@ -572,7 +548,7 @@ describe('GET /api/check-results', () => {
 describe('GET /api/domains/:id/wizard-state', () => {
   it('returns default state when no wizard state saved', async () => {
     const env = makeEnv();
-    const domain: Partial<Domain> = { id: 1, domain: 'acme.com', customer_id: 'org_test' };
+    const domain: Partial<Domain> = { id: 1, domain: 'acme.com'};
     (env.DB.prepare as any)
       .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(domain) }) }) // getDomainById
       .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(null) }) }); // getSetting (no saved state)
@@ -587,7 +563,7 @@ describe('GET /api/domains/:id/wizard-state', () => {
 
   it('returns saved wizard state', async () => {
     const env = makeEnv();
-    const domain: Partial<Domain> = { id: 1, domain: 'acme.com', customer_id: 'org_test' };
+    const domain: Partial<Domain> = { id: 1, domain: 'acme.com' };
     const savedState = { spf: 'complete', dkim: 'skipped', dmarc: 'not_started', routing: 'not_started' };
     (env.DB.prepare as any)
       .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(domain) }) })
@@ -599,15 +575,6 @@ describe('GET /api/domains/:id/wizard-state', () => {
     expect(body.dkim).toBe('skipped');
   });
 
-  it('returns 404 for domain not owned by customer', async () => {
-    const env = makeEnv();
-    const domain: Partial<Domain> = { id: 1, domain: 'acme.com', customer_id: 'org_other' };
-    (env.DB.prepare as any)
-      .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(domain) }) });
-    const res = await handleApi(req('GET', '/api/domains/1/wizard-state'), env, ctx);
-    expect(res.status).toBe(404);
-  });
-
   it('returns 400 for non-numeric id', async () => {
     const res = await handleApi(req('GET', '/api/domains/abc/wizard-state'), makeEnv(), ctx);
     expect(res.status).toBe(400);
@@ -617,7 +584,7 @@ describe('GET /api/domains/:id/wizard-state', () => {
 describe('PUT /api/domains/:id/wizard-state', () => {
   it('saves wizard state updates', async () => {
     const env = makeEnv();
-    const domain: Partial<Domain> = { id: 1, domain: 'acme.com', customer_id: 'org_test' };
+    const domain: Partial<Domain> = { id: 1, domain: 'acme.com' };
     (env.DB.prepare as any)
       .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(domain) }) }) // getDomainById
       .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(null) }) }); // getSetting (current state)
@@ -629,14 +596,6 @@ describe('PUT /api/domains/:id/wizard-state', () => {
     expect(body.dkim).toBe('not_started');
   });
 
-  it('returns 404 for domain not owned by customer', async () => {
-    const env = makeEnv();
-    const domain: Partial<Domain> = { id: 1, domain: 'acme.com', customer_id: 'org_other' };
-    (env.DB.prepare as any)
-      .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(domain) }) });
-    const res = await handleApi(req('PUT', '/api/domains/1/wizard-state', { spf: 'complete' }), env, ctx);
-    expect(res.status).toBe(404);
-  });
 });
 
 afterEach(() => vi.clearAllMocks());

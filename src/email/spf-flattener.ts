@@ -17,7 +17,6 @@ const DOH_URL = 'https://cloudflare-dns.com/dns-query';
 /** Optional audit context for self-logging DNS mutations. */
 export interface SpfAuditOpts {
   db: D1Database;
-  customer_id: string;
   domain_name: string;
   actor_id?: string | null;
   actor_email?: string | null;
@@ -175,7 +174,6 @@ export async function updateDnsRecord(
 
   if (audit?.opts) {
     logAudit(audit.opts.db, {
-      customer_id: audit.opts.customer_id,
       actor_id: audit.opts.actor_id,
       actor_email: audit.opts.actor_email,
       actor_type: audit.opts.actor_type ?? 'system',

@@ -5,7 +5,6 @@ import type { DomainWeeklyStat, FailingSource } from '../../src/db/queries';
 // ── Module mocks ──────────────────────────────────────────────
 
 vi.mock('../../src/db/queries', () => ({
-  getAllCustomers: vi.fn(),
   getWeeklyDomainStats: vi.fn(),
   getTopFailingSources: vi.fn(),
 }));
@@ -14,7 +13,7 @@ import * as queries from '../../src/db/queries';
 
 // ── Fixtures ──────────────────────────────────────────────────
 
-const CUSTOMER = { id: 'org_1', name: 'Acme', email: 'admin@acme.com', plan: 'starter', created_at: 0, updated_at: 0 };
+const ADMIN = { email: 'admin@acme.com', name: 'Acme' };
 
 const STAT_GOOD: DomainWeeklyStat = {
   domain_id: 1, domain: 'acme.com', dmarc_policy: 'reject',
@@ -40,7 +39,11 @@ const SOURCE: FailingSource = { source_ip: '1.2.3.4', total: 20, header_from: 'm
 
 function makeEnv() {
   return {
-    DB: {} as D1Database,
+    DB: {
+      prepare: vi.fn().mockReturnValue({
+        first: vi.fn().mockResolvedValue(ADMIN),
+      }),
+    } as unknown as D1Database,
     FROM_EMAIL: 'noreply@reports.inboxangel.io',
     REPORTS_DOMAIN: 'reports.inboxangel.io',
   };
@@ -101,7 +104,6 @@ describe('buildDigestBody', () => {
 
 describe('sendWeeklyDigests', () => {
   beforeEach(() => {
-    vi.mocked(queries.getAllCustomers).mockResolvedValue({ results: [CUSTOMER] } as any);
     vi.mocked(queries.getWeeklyDomainStats).mockResolvedValue({ results: [STAT_GOOD] } as any);
     vi.mocked(queries.getTopFailingSources).mockResolvedValue({ results: [SOURCE] } as any);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
@@ -112,14 +114,14 @@ describe('sendWeeklyDigests', () => {
     vi.unstubAllGlobals();
   });
 
-  it('calls getWeeklyDomainStats for each customer', async () => {
+  it('calls getWeeklyDomainStats', async () => {
     await sendWeeklyDigests(makeEnv());
-    expect(queries.getWeeklyDomainStats).toHaveBeenCalledWith(makeEnv().DB, 'org_1', expect.any(Number));
+    expect(queries.getWeeklyDomainStats).toHaveBeenCalledWith(expect.anything(), expect.any(Number));
   });
 
   it('fetches failing sources only for domains with failures', async () => {
     await sendWeeklyDigests(makeEnv());
-    expect(queries.getTopFailingSources).toHaveBeenCalledWith(makeEnv().DB, 1, expect.any(Number));
+    expect(queries.getTopFailingSources).toHaveBeenCalledWith(expect.anything(), 1, expect.any(Number));
   });
 
   it('skips getTopFailingSources when domain has no failures', async () => {
@@ -129,7 +131,6 @@ describe('sendWeeklyDigests', () => {
   });
 
   it('sends email via SEND_EMAIL binding when configured', async () => {
-    // fetchLatestVersion calls fetch — stub it
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
     const sendEmail = { send: vi.fn().mockResolvedValue(undefined) };
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -146,7 +147,7 @@ describe('sendWeeklyDigests', () => {
     consoleSpy.mockRestore();
   });
 
-  it('skips customers with no domains', async () => {
+  it('skips when no domains exist', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
     vi.mocked(queries.getWeeklyDomainStats).mockResolvedValue({ results: [] } as any);
     const sendEmail = { send: vi.fn() };
@@ -156,17 +157,15 @@ describe('sendWeeklyDigests', () => {
     consoleSpy.mockRestore();
   });
 
-  it('continues to next customer when one fails', async () => {
-    const customer2 = { ...CUSTOMER, id: 'org_2', email: 'admin@other.com' };
-    vi.mocked(queries.getAllCustomers).mockResolvedValue({ results: [CUSTOMER, customer2] } as any);
-    vi.mocked(queries.getWeeklyDomainStats)
-      .mockRejectedValueOnce(new Error('D1 timeout'))
-      .mockResolvedValueOnce({ results: [STAT_GOOD] } as any);
+  it('skips when no admin user exists', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const env = makeEnv();
+    (env.DB.prepare as any).mockReturnValue({
+      first: vi.fn().mockResolvedValue(null),
+    });
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    await sendWeeklyDigests(makeEnv());
-    // Second customer was still processed (log called for it)
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('sent to admin@other.com'));
+    await sendWeeklyDigests(env);
+    expect(queries.getWeeklyDomainStats).not.toHaveBeenCalled();
     consoleSpy.mockRestore();
   });
 });

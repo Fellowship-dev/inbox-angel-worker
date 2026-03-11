@@ -1,29 +1,6 @@
-import { AggregateReport, CheckResult, Customer, Domain, MonitorSubscription, ReportRecord, SpfFlattenConfig, MtaStsConfig, MtaStsMode, TlsReport } from './types';
-
-// ── Customers ────────────────────────────────────────────────
-
-export function getCustomer(db: D1Database, id: string) {
-  return db.prepare('SELECT * FROM customers WHERE id = ?').bind(id).first<Customer>();
-}
-
-export function getAllCustomers(db: D1Database) {
-  return db.prepare('SELECT * FROM customers ORDER BY created_at').all<Customer>();
-}
-
-export function upsertCustomer(db: D1Database, c: Pick<Customer, 'id' | 'name' | 'email' | 'plan'>) {
-  return db.prepare(`
-    INSERT INTO customers (id, name, email, plan)
-    VALUES (?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET name=excluded.name, email=excluded.email, plan=excluded.plan, updated_at=unixepoch()
-  `).bind(c.id, c.name, c.email, c.plan).run();
-}
+import { AggregateReport, CheckResult, Domain, MonitorSubscription, ReportRecord, SpfFlattenConfig, MtaStsConfig, MtaStsMode, TlsReport } from './types';
 
 // ── Domains ──────────────────────────────────────────────────
-
-export function getDomainsByCustomer(db: D1Database, customerId: string) {
-  return db.prepare('SELECT * FROM domains WHERE customer_id = ? ORDER BY domain')
-    .bind(customerId).all<Domain>();
-}
 
 export function getDomainByName(db: D1Database, domain: string) {
   return db.prepare('SELECT * FROM domains WHERE domain = ?').bind(domain).first<Domain>();
@@ -33,10 +10,10 @@ export function getDomainById(db: D1Database, id: number) {
   return db.prepare('SELECT * FROM domains WHERE id = ?').bind(id).first<Domain>();
 }
 
-export function insertDomain(db: D1Database, d: Pick<Domain, 'customer_id' | 'domain' | 'rua_address'>) {
+export function insertDomain(db: D1Database, d: Pick<Domain, 'domain' | 'rua_address'>) {
   return db.prepare(`
-    INSERT INTO domains (customer_id, domain, rua_address) VALUES (?, ?, ?)
-  `).bind(d.customer_id, d.domain, d.rua_address).run();
+    INSERT INTO domains (domain, rua_address) VALUES (?, ?)
+  `).bind(d.domain, d.rua_address).run();
 }
 
 export function getAllDomains(db: D1Database) {
@@ -87,22 +64,21 @@ export function getCheckResultByToken(db: D1Database, token: string) {
 export function insertAggregateReport(db: D1Database, r: Omit<AggregateReport, 'id' | 'created_at'>) {
   return db.prepare(`
     INSERT OR IGNORE INTO aggregate_reports
-      (customer_id, domain_id, org_name, report_id, date_begin, date_end,
+      (domain_id, org_name, report_id, date_begin, date_end,
        total_count, pass_count, fail_count, raw_xml)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
-    r.customer_id, r.domain_id, r.org_name, r.report_id,
+    r.domain_id, r.org_name, r.report_id,
     r.date_begin, r.date_end, r.total_count, r.pass_count, r.fail_count, r.raw_xml
   ).run();
 }
 
-export function getRecentReports(db: D1Database, customerId: string, limit = 30) {
+export function getRecentReports(db: D1Database, limit = 30) {
   return db.prepare(`
     SELECT r.*, d.domain FROM aggregate_reports r
     JOIN domains d ON d.id = r.domain_id
-    WHERE r.customer_id = ?
     ORDER BY r.date_begin DESC LIMIT ?
-  `).bind(customerId, limit).all<AggregateReport & { domain: string }>();
+  `).bind(limit).all<AggregateReport & { domain: string }>();
 }
 
 // ── Monitor Subscriptions ─────────────────────────────────────
@@ -158,7 +134,7 @@ export interface FailingSource {
   header_from: string | null;
 }
 
-export function getWeeklyDomainStats(db: D1Database, customerId: string, since: number) {
+export function getWeeklyDomainStats(db: D1Database, since: number) {
   return db.prepare(`
     SELECT
       d.id AS domain_id,
@@ -170,10 +146,9 @@ export function getWeeklyDomainStats(db: D1Database, customerId: string, since: 
       COUNT(r.id) AS report_count
     FROM domains d
     LEFT JOIN aggregate_reports r ON r.domain_id = d.id AND r.date_begin >= ?
-    WHERE d.customer_id = ?
     GROUP BY d.id, d.domain, d.dmarc_policy
     ORDER BY d.domain
-  `).bind(since, customerId).all<DomainWeeklyStat>();
+  `).bind(since).all<DomainWeeklyStat>();
 }
 
 export function getTopFailingSources(db: D1Database, domainId: number, since: number, limit = 5) {
@@ -597,16 +572,16 @@ export function deleteMtaStsConfig(db: D1Database, domainId: number) {
 export function insertTlsReport(db: D1Database, r: Omit<TlsReport, 'id' | 'created_at'>) {
   return db.prepare(`
     INSERT INTO tls_reports
-      (domain_id, customer_id, org_name, date_begin, date_end,
+      (domain_id, org_name, date_begin, date_end,
        total_success, total_failure, failure_details, raw_json)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(domain_id, org_name, date_begin) DO UPDATE SET
       total_success = excluded.total_success,
       total_failure = excluded.total_failure,
       failure_details = excluded.failure_details,
       raw_json = excluded.raw_json
   `).bind(
-    r.domain_id, r.customer_id, r.org_name, r.date_begin, r.date_end,
+    r.domain_id, r.org_name, r.date_begin, r.date_end,
     r.total_success, r.total_failure, r.failure_details, r.raw_json
   ).run();
 }
@@ -626,7 +601,6 @@ export function getTlsReportSummary(db: D1Database, domainId: number, since: num
 
 export interface AuditLogRow {
   id: number;
-  customer_id: string;
   actor_id: string | null;
   actor_email: string | null;
   actor_type: 'user' | 'system';
@@ -642,7 +616,6 @@ export interface AuditLogRow {
 
 export function getAuditLog(
   db: D1Database,
-  customerId: string,
   opts: {
     page?: number;
     limit?: number;
@@ -657,8 +630,8 @@ export function getAuditLog(
   const safeLimit = Math.min(limit, 200);
   const offset = (page - 1) * safeLimit;
 
-  const conditions: string[] = ['customer_id = ?'];
-  const params: (string | number)[] = [customerId];
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
 
   if (action) {
     conditions.push('action LIKE ?');
@@ -683,9 +656,10 @@ export function getAuditLog(
 
   params.push(safeLimit, offset);
 
+  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
   return db
     .prepare(
-      `SELECT * FROM audit_log WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      `SELECT * FROM audit_log ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
     )
     .bind(...params)
     .all<AuditLogRow>();
@@ -696,14 +670,14 @@ export function getAuditLog(
 export function insertReportRecords(db: D1Database, records: Omit<ReportRecord, 'id' | 'created_at'>[]) {
   const stmt = db.prepare(`
     INSERT INTO report_records
-      (report_id, customer_id, source_ip, count, disposition,
+      (report_id, source_ip, count, disposition,
        dkim_result, dkim_domain, spf_result, spf_domain, header_from,
        reverse_dns, base_domain, country_code, org)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   return db.batch(records.map(r =>
     stmt.bind(
-      r.report_id, r.customer_id, r.source_ip, r.count, r.disposition,
+      r.report_id, r.source_ip, r.count, r.disposition,
       r.dkim_result, r.dkim_domain, r.spf_result, r.spf_domain, r.header_from,
       r.reverse_dns ?? null, r.base_domain ?? null, r.country_code ?? null, r.org ?? null
     )

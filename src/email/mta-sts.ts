@@ -19,7 +19,6 @@ const DOH_URL = 'https://cloudflare-dns.com/dns-query';
 /** Optional audit context for self-logging DNS mutations. */
 export interface MtaStsAuditOpts {
   db: D1Database;
-  customer_id: string;
   domain_name: string;
   actor_id?: string | null;
   actor_email?: string | null;
@@ -150,7 +149,6 @@ async function createDnsRecord(
 
   if (audit) {
     logAudit(audit.db, {
-      customer_id: audit.customer_id,
       actor_id: audit.actor_id,
       actor_email: audit.actor_email,
       actor_type: audit.actor_type ?? 'user',
@@ -195,7 +193,6 @@ async function patchDnsRecord(
 
   if (audit?.opts) {
     logAudit(audit.opts.db, {
-      customer_id: audit.opts.customer_id,
       actor_id: audit.opts.actor_id,
       actor_email: audit.opts.actor_email,
       actor_type: audit.opts.actor_type ?? 'user',
@@ -225,7 +222,6 @@ async function deleteDnsRecord(
 
   if (audit && (res.ok || res.status === 404)) {
     logAudit(audit.db, {
-      customer_id: audit.customer_id,
       actor_id: audit.actor_id,
       actor_email: audit.actor_email,
       actor_type: audit.actor_type ?? 'user',

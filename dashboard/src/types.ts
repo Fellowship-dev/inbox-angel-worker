@@ -3,7 +3,6 @@ export interface Domain {
   domain: string;
   dmarc_policy: 'none' | 'quarantine' | 'reject' | null;
   rua_address: string;
-  customer_id: string;
   created_at: number; // unix timestamp
   alerts_enabled: number; // 1 = on, 0 = off
 }
@@ -138,7 +137,6 @@ export interface MtaStsStatus {
 
 export interface AuditLogEntry {
   id: number;
-  customer_id: string;
   actor_id: string | null;
   actor_email: string | null;
   actor_type: 'user' | 'system';

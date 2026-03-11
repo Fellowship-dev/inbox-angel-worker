@@ -9,7 +9,6 @@
 // Reads parse them back. Callers pass raw objects — no pre-serialisation needed.
 
 export interface AuditEntry {
-  customer_id: string;
   actor_id?: string | null;
   actor_email?: string | null;
   actor_type?: 'user' | 'system';
@@ -30,12 +29,11 @@ export function logAudit(
   const run = db
     .prepare(
       `INSERT INTO audit_log
-        (customer_id, actor_id, actor_email, actor_type, action,
+        (actor_id, actor_email, actor_type, action,
          resource_type, resource_id, resource_name, before_value, after_value, meta)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
-      entry.customer_id,
       entry.actor_id ?? null,
       entry.actor_email ?? null,
       entry.actor_type ?? 'user',

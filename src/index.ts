@@ -116,7 +116,6 @@ export default {
             await updateSpfFlattenResult(env.DB, config.domain_id, result.flattened_record, result.ip_count, result.cf_record_id);
             console.log(`[spf-flatten] ${domain.domain}: updated (${result.ip_count} IPs)`);
             logAudit(env.DB, {
-              customer_id: domain.customer_id,
               actor_type: 'system',
               action: 'spf_flatten.update',
               resource_type: 'domain', resource_id: String(domain.id), resource_name: domain.domain,
@@ -164,7 +163,6 @@ export default {
             await updateMtaStsMxHosts(env.DB, cfg.domain_id, liveMx.join(','), newPolicyId);
             console.log(`[mta-sts] ${domain.domain}: MX changed, policy_id updated`);
             logAudit(env.DB, {
-              customer_id: domain.customer_id,
               actor_type: 'system',
               action: 'cron.mta_sts_mx',
               resource_type: 'domain', resource_id: String(domain.id), resource_name: domain.domain,

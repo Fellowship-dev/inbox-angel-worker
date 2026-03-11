@@ -13,18 +13,9 @@ const MIGRATIONS: { version: number; sql: string }[] = [
 	{
 		version: 1,
 		sql: `
-      CREATE TABLE IF NOT EXISTS customers (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        email TEXT NOT NULL,
-        plan TEXT NOT NULL DEFAULT 'free',
-        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-      );
       CREATE TABLE IF NOT EXISTS domains (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-        domain TEXT NOT NULL,
+        domain TEXT NOT NULL UNIQUE,
         rua_address TEXT NOT NULL,
         dmarc_policy TEXT,
         dmarc_pct INTEGER,
@@ -32,10 +23,8 @@ const MIGRATIONS: { version: number; sql: string }[] = [
         dkim_configured INTEGER NOT NULL DEFAULT 0,
         auth_record_provisioned INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-        updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-        UNIQUE(customer_id, domain)
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch())
       );
-      CREATE INDEX IF NOT EXISTS idx_domains_customer ON domains(customer_id);
       CREATE INDEX IF NOT EXISTS idx_domains_domain ON domains(domain);
       CREATE TABLE IF NOT EXISTS check_results (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -56,7 +45,6 @@ const MIGRATIONS: { version: number; sql: string }[] = [
       CREATE INDEX IF NOT EXISTS idx_check_results_domain ON check_results(from_domain);
       CREATE TABLE IF NOT EXISTS aggregate_reports (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
         domain_id INTEGER NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
         org_name TEXT NOT NULL,
         report_id TEXT NOT NULL,
@@ -69,13 +57,11 @@ const MIGRATIONS: { version: number; sql: string }[] = [
         created_at INTEGER NOT NULL DEFAULT (unixepoch()),
         UNIQUE(domain_id, report_id)
       );
-      CREATE INDEX IF NOT EXISTS idx_agg_reports_customer ON aggregate_reports(customer_id);
       CREATE INDEX IF NOT EXISTS idx_agg_reports_domain ON aggregate_reports(domain_id);
       CREATE INDEX IF NOT EXISTS idx_agg_reports_date ON aggregate_reports(date_begin);
       CREATE TABLE IF NOT EXISTS report_records (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         report_id INTEGER NOT NULL REFERENCES aggregate_reports(id) ON DELETE CASCADE,
-        customer_id TEXT NOT NULL,
         source_ip TEXT NOT NULL,
         count INTEGER NOT NULL DEFAULT 1,
         disposition TEXT NOT NULL,
@@ -87,7 +73,6 @@ const MIGRATIONS: { version: number; sql: string }[] = [
         created_at INTEGER NOT NULL DEFAULT (unixepoch())
       );
       CREATE INDEX IF NOT EXISTS idx_records_report ON report_records(report_id);
-      CREATE INDEX IF NOT EXISTS idx_records_customer ON report_records(customer_id);
       CREATE INDEX IF NOT EXISTS idx_records_ip ON report_records(source_ip);
     `,
 	},
@@ -263,7 +248,6 @@ const MIGRATIONS: { version: number; sql: string }[] = [
       CREATE TABLE IF NOT EXISTS tls_reports (
         id              INTEGER PRIMARY KEY AUTOINCREMENT,
         domain_id       INTEGER NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
-        customer_id     TEXT NOT NULL,
         org_name        TEXT NOT NULL,
         date_begin      INTEGER NOT NULL,
         date_end        INTEGER NOT NULL,
@@ -283,7 +267,6 @@ const MIGRATIONS: { version: number; sql: string }[] = [
 		sql: `
       CREATE TABLE IF NOT EXISTS audit_log (
         id            INTEGER PRIMARY KEY AUTOINCREMENT,
-        customer_id   TEXT    NOT NULL,
         actor_id      TEXT,
         actor_email   TEXT,
         actor_type    TEXT    NOT NULL DEFAULT 'user',
@@ -296,8 +279,8 @@ const MIGRATIONS: { version: number; sql: string }[] = [
         meta          TEXT,
         created_at    INTEGER NOT NULL DEFAULT (unixepoch())
       );
-      CREATE INDEX IF NOT EXISTS idx_audit_customer_created ON audit_log(customer_id, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_audit_actor            ON audit_log(actor_id);
+      CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_audit_actor   ON audit_log(actor_id);
       CREATE INDEX IF NOT EXISTS idx_audit_resource         ON audit_log(resource_type, resource_id);
     `,
 	},

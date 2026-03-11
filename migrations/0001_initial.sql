@@ -1,41 +1,25 @@
 -- InboxAngel D1 Schema — Migration 0001
--- Multi-tenant: all tables scoped to customer_id (= Auth0 org_id)
-
--- ============================================================
--- Customers
--- One row per Auth0 Organization (= one paying account)
--- ============================================================
-CREATE TABLE IF NOT EXISTS customers (
-  id TEXT PRIMARY KEY,                  -- Auth0 org_id (e.g. "org_abc123")
-  name TEXT NOT NULL,
-  email TEXT NOT NULL,                  -- billing/contact email
-  plan TEXT NOT NULL DEFAULT 'free',    -- free | starter | pro | enterprise
-  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
-);
+-- Single-tenant: one instance per deployment
 
 -- ============================================================
 -- Domains
--- Each customer can monitor multiple domains
+-- Monitor multiple domains per instance
 -- ============================================================
 CREATE TABLE IF NOT EXISTS domains (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
-  domain TEXT NOT NULL,                 -- e.g. "company.com"
-  rua_address TEXT NOT NULL,            -- e.g. "abc123@reports.inboxangel.com"
+  domain TEXT NOT NULL UNIQUE,             -- e.g. "company.com"
+  rua_address TEXT NOT NULL,               -- e.g. "abc123@reports.inboxangel.com"
   -- Current DMARC policy (refreshed on each report ingestion)
-  dmarc_policy TEXT,                    -- none | quarantine | reject
-  dmarc_pct INTEGER,                    -- 0-100
-  spf_record TEXT,                      -- raw SPF record
+  dmarc_policy TEXT,                       -- none | quarantine | reject
+  dmarc_pct INTEGER,                       -- 0-100
+  spf_record TEXT,                         -- raw SPF record
   dkim_configured INTEGER NOT NULL DEFAULT 0,  -- boolean
   -- Authorization record provisioned in Cloudflare DNS
   auth_record_provisioned INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-  updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-  UNIQUE(customer_id, domain)
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
 );
 
-CREATE INDEX IF NOT EXISTS idx_domains_customer ON domains(customer_id);
 CREATE INDEX IF NOT EXISTS idx_domains_domain ON domains(domain);
 
 -- ============================================================
@@ -72,7 +56,6 @@ CREATE INDEX IF NOT EXISTS idx_check_results_domain ON check_results(from_domain
 -- ============================================================
 CREATE TABLE IF NOT EXISTS aggregate_reports (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  customer_id TEXT NOT NULL REFERENCES customers(id) ON DELETE CASCADE,
   domain_id INTEGER NOT NULL REFERENCES domains(id) ON DELETE CASCADE,
   -- Report metadata (from <report_metadata>)
   org_name TEXT NOT NULL,               -- reporting org (e.g. "Google Inc.")
@@ -89,7 +72,6 @@ CREATE TABLE IF NOT EXISTS aggregate_reports (
   UNIQUE(domain_id, report_id)          -- deduplicate re-deliveries
 );
 
-CREATE INDEX IF NOT EXISTS idx_agg_reports_customer ON aggregate_reports(customer_id);
 CREATE INDEX IF NOT EXISTS idx_agg_reports_domain ON aggregate_reports(domain_id);
 CREATE INDEX IF NOT EXISTS idx_agg_reports_date ON aggregate_reports(date_begin);
 
@@ -101,7 +83,6 @@ CREATE INDEX IF NOT EXISTS idx_agg_reports_date ON aggregate_reports(date_begin)
 CREATE TABLE IF NOT EXISTS report_records (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   report_id INTEGER NOT NULL REFERENCES aggregate_reports(id) ON DELETE CASCADE,
-  customer_id TEXT NOT NULL,            -- denormalized for fast per-customer queries
   -- Source
   source_ip TEXT NOT NULL,
   count INTEGER NOT NULL DEFAULT 1,     -- message count from this IP
@@ -119,5 +100,4 @@ CREATE TABLE IF NOT EXISTS report_records (
 );
 
 CREATE INDEX IF NOT EXISTS idx_records_report ON report_records(report_id);
-CREATE INDEX IF NOT EXISTS idx_records_customer ON report_records(customer_id);
 CREATE INDEX IF NOT EXISTS idx_records_ip ON report_records(source_ip);

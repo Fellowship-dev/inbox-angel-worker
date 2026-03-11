@@ -6,7 +6,7 @@
 // Recipients must be verified destination addresses in CF Email Routing.
 // Falls back to console.log if binding is absent (wrangler dev has no local send_email support).
 
-import { getAllCustomers, getWeeklyDomainStats, getTopFailingSources, DomainWeeklyStat, FailingSource } from '../db/queries';
+import { getWeeklyDomainStats, getTopFailingSources, DomainWeeklyStat, FailingSource } from '../db/queries';
 import { version } from '../../package.json';
 
 const GH_RAW = 'https://raw.githubusercontent.com/Fellowship-dev/inbox-angel-worker/main/package.json';
@@ -155,33 +155,38 @@ export async function sendWeeklyDigests(env: DigestEnv, now = Date.now()): Promi
     console.log(`[digest] update available: v${latestVersion} (running v${version})`);
   }
 
-  const { results: customers } = await getAllCustomers(env.DB);
-  console.log(`[digest] sending weekly digest to ${customers.length} customer(s)`);
+  // Single-tenant: get admin user email for digest delivery
+  const admin = await env.DB.prepare(`SELECT email, name FROM users WHERE role = 'admin' LIMIT 1`).first<{ email: string; name: string }>();
+  if (!admin) {
+    console.log('[digest] no admin user found — skipping weekly digest');
+    return;
+  }
 
-  for (const customer of customers) {
-    try {
-      const { results: stats } = await getWeeklyDomainStats(env.DB, customer.id, since);
-      if (stats.length === 0) continue; // no domains — nothing to send
-
-      // Fetch top failing sources for domains that had failures
-      const sourcesByDomain = new Map<number, FailingSource[]>();
-      for (const stat of stats) {
-        if (stat.fail_messages > 0) {
-          const { results: sources } = await getTopFailingSources(env.DB, stat.domain_id, since);
-          sourcesByDomain.set(stat.domain_id, sources);
-        }
-      }
-
-      const body = buildDigestBody(customer.name, stats, sourcesByDomain, weekLabel, ruaAddress, env.REPORTS_DOMAIN, latestVersion);
-      const hasIssues = stats.some(s => s.fail_messages > 0 || !s.dmarc_policy || s.dmarc_policy === 'none');
-      const subject = hasIssues
-        ? `⚠️ DMARC Weekly Digest — action needed`
-        : `✅ DMARC Weekly Digest — all clear`;
-
-      await sendDigest(customer.email, subject, body, env);
-      console.log(`[digest] sent to ${customer.email} (${stats.length} domain(s))`);
-    } catch (e) {
-      console.error(`[digest] error for customer ${customer.id}:`, e);
+  try {
+    const { results: stats } = await getWeeklyDomainStats(env.DB, since);
+    if (stats.length === 0) {
+      console.log('[digest] no domains — skipping weekly digest');
+      return;
     }
+
+    // Fetch top failing sources for domains that had failures
+    const sourcesByDomain = new Map<number, FailingSource[]>();
+    for (const stat of stats) {
+      if (stat.fail_messages > 0) {
+        const { results: sources } = await getTopFailingSources(env.DB, stat.domain_id, since);
+        sourcesByDomain.set(stat.domain_id, sources);
+      }
+    }
+
+    const body = buildDigestBody(admin.name ?? 'there', stats, sourcesByDomain, weekLabel, ruaAddress, env.REPORTS_DOMAIN, latestVersion);
+    const hasIssues = stats.some(s => s.fail_messages > 0 || !s.dmarc_policy || s.dmarc_policy === 'none');
+    const subject = hasIssues
+      ? `⚠️ DMARC Weekly Digest — action needed`
+      : `✅ DMARC Weekly Digest — all clear`;
+
+    await sendDigest(admin.email, subject, body, env);
+    console.log(`[digest] sent to ${admin.email} (${stats.length} domain(s))`);
+  } catch (e) {
+    console.error('[digest] error:', e);
   }
 }

@@ -1,13 +1,13 @@
 // Handles inbound DMARC aggregate report emails.
 // Triggered for any address other than check-*@reports.yourdomain.com.
-// Flow: extract bytes → parse XML → resolve customer by policy_domain → store in D1.
+// Flow: extract bytes → parse XML → resolve domain by policy_domain → store in D1.
 //
 // Routing is by report content (policy_published.domain), not by the recipient address.
 // This lets self-hosters use a fixed rua=mailto:rua@reports.yourdomain.com for all domains.
 
 import { Env } from '../index';
 import { extractAttachmentBytes, MimeExtractError } from './mime-extract';
-import { resolveCustomer } from './resolve-customer';
+import { resolveDomain } from './resolve-customer';
 import { parseDmarcEmail, ParseEmailError } from '../dmarc/parse-email';
 import { storeReport } from '../dmarc/store-report';
 
@@ -52,21 +52,20 @@ export async function handleDmarcReport(
     return { failure_count: 0 };
   }
 
-  // 3. Resolve customer + domain from the policy_domain in the report
+  // 3. Resolve domain from the policy_domain in the report
   const policyDomain = report.policy_published.domain;
-  const resolved = await resolveCustomer(env.DB, policyDomain);
-  if (!resolved) {
-    console.warn('dmarc-report: no customer found for policy_domain', policyDomain);
+  const domain = await resolveDomain(env.DB, policyDomain);
+  if (!domain) {
+    console.warn('dmarc-report: no domain found for policy_domain', policyDomain);
     message.setReject(`Unknown domain ${policyDomain} — not a registered InboxAngel inbox`);
     return { failure_count: 0 };
   }
-  const { customer, domain } = resolved;
 
   const failureCount = report.records.reduce((sum, r) => sum + (r.count ?? 0) * (r.policy_evaluated?.dkim === 'fail' || r.policy_evaluated?.spf === 'fail' ? 1 : 0), 0);
 
   // 4. Store in D1 (dedup handled by INSERT OR IGNORE inside storeReport)
   try {
-    const result = await storeReport(env.DB, customer.id, domain.id, report, rawXml);
+    const result = await storeReport(env.DB, domain.id, report, rawXml);
     if (result.stored) {
       console.log(
         `dmarc-report: stored report ${report.report_metadata.report_id} ` +
