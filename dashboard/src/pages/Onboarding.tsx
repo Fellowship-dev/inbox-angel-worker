@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'preact/hooks';
-import { getDomains, getOnboardingStatus, applyDmarc, getWizardState, updateWizardState, setupEmailRouting, setBaseDomain, registerDestination } from '../api';
+import { getDomains, getOnboardingStatus, applyDmarc, applySpf, getWizardState, updateWizardState, setupEmailRouting, setBaseDomain, registerDestination } from '../api';
+import { SPF_PROVIDERS, detectProviders, extractIncludes, buildSpfRecord } from '../spf-providers';
 import type { OnboardingStatus, WizardState, WizardStepState } from '../types';
 
 type Severity = 'good' | 'info' | 'warning' | 'error';
@@ -201,9 +202,60 @@ function DomainStep({ onDomainSet }: { onDomainSet: (domainId: number) => void }
 }
 
 function SpfStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext: () => void; onSkip: () => void }) {
-  const { spf } = status;
+  const { spf, cf_available } = status;
   const sev = spfSeverity(spf);
   const [copied, setCopied] = useState(false);
+  const [applying, setApplying] = useState(false);
+  const [applied, setApplied] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
+  const [customInclude, setCustomInclude] = useState('');
+
+  // Detect existing providers and unknown includes from current record
+  const existingIncludes = spf.record ? extractIncludes(spf.record) : [];
+  const detectedProviders = spf.record ? detectProviders(spf.record) : [];
+  const detectedIncludeSet = new Set(detectedProviders.map(p => p.include));
+  const unknownIncludes = existingIncludes.filter(i => !SPF_PROVIDERS.some(p => p.include === i));
+
+  // Checkbox state: provider include domain → checked
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(existingIncludes));
+  // Track qualifier from existing record
+  const existingQualifier = spf.record?.includes('-all') ? '-all' as const : '~all' as const;
+  const [qualifier, setQualifier] = useState<'~all' | '-all'>(existingQualifier);
+
+  const toggleProvider = (include: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(include)) next.delete(include);
+      else next.add(include);
+      return next;
+    });
+  };
+
+  const addCustom = () => {
+    const trimmed = customInclude.trim().toLowerCase();
+    if (trimmed && !selected.has(trimmed)) {
+      setSelected(prev => new Set([...prev, trimmed]));
+      setCustomInclude('');
+    }
+  };
+
+  const removeInclude = (include: string) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      next.delete(include);
+      return next;
+    });
+  };
+
+  // Build preview record from selections
+  const selectedIncludes = Array.from(selected);
+  const previewRecord = selectedIncludes.length > 0
+    ? buildSpfRecord(selectedIncludes, qualifier)
+    : null;
+  const estimatedLookups = selectedIncludes.length; // each include = ~1 lookup
+
+  const hasChanges = previewRecord !== spf.record;
+  const flatteningActive = spf.flattening_active;
 
   const copy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -211,16 +263,53 @@ function SpfStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext:
     setTimeout(() => setCopied(false), 1500);
   };
 
+  const apply = async () => {
+    if (!previewRecord) return;
+    setApplying(true);
+    setApplyError(null);
+    try {
+      await applySpf(status.domain_id, previewRecord);
+      setApplied(true);
+    } catch (e: any) {
+      setApplyError(e.message ?? 'Failed to apply');
+    } finally {
+      setApplying(false);
+    }
+  };
+
   const count = spf.lookup_count ?? 0;
+
+  // If flattening is active, show read-only view
+  if (flatteningActive) {
+    return (
+      <div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
+          <Badge sev="info" />
+          <h2 style={s.stepTitle}>SPF record</h2>
+        </div>
+        {spf.record && (
+          <div style={{ marginBottom: '0.75rem' }}>
+            <p style={s.label}>Current record</p>
+            <CodeBlock value={spf.record} onCopy={() => copy(spf.record!)} copied={copied} />
+          </div>
+        )}
+        <p style={{ ...s.body, color: '#7c3aed', fontSize: '0.85rem' }}>
+          SPF flattening is active for this domain. Editing is disabled — changes would be overwritten
+          by the next flattening run. Disable flattening on the domain detail page to edit manually.
+        </p>
+        <StepNav onNext={onNext} onSkip={onSkip} showSkip={false} />
+      </div>
+    );
+  }
 
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '0.75rem' }}>
-        <Badge sev={sev} />
+        <Badge sev={applied ? 'info' : sev} />
         <h2 style={s.stepTitle}>SPF record</h2>
       </div>
 
-      {spf.record ? (
+      {spf.record && !applied && (
         <div style={{ marginBottom: '0.75rem' }}>
           <p style={s.label}>Current record</p>
           <CodeBlock value={spf.record} onCopy={() => copy(spf.record!)} copied={copied} />
@@ -232,30 +321,129 @@ function SpfStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext:
               {count < 8 && ' — healthy'}
             </p>
           )}
-          {count > 9 && (
-            <p style={{ ...s.body, color: '#d97706', fontSize: '0.8rem', marginTop: '0.4rem' }}>
-              You're over the 10-lookup RFC limit. Check the domain detail page after setup for flattening options.
-            </p>
-          )}
         </div>
+      )}
+
+      {!spf.record && !applied && (
+        <p style={s.body}>No SPF record found. Without SPF, any server can claim to send email as you. Select your email providers below to create one.</p>
+      )}
+
+      {applied ? (
+        <p style={s.body}>
+          SPF record applied successfully. Allow a few minutes for DNS propagation.
+        </p>
       ) : (
         <>
-          <p style={s.body}>No SPF record found. Without SPF, any server can claim to send email as you.</p>
-          <p style={s.body}>
-            Create one with your email provider's instructions, then return here. A basic example:
-            <br />
-            <code style={s.inline}>v=spf1 include:_spf.google.com ~all</code>
-          </p>
+          {/* Provider checkboxes */}
+          <p style={{ ...s.label, marginTop: '0.75rem' }}>Email providers</p>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.35rem 1rem', marginTop: '0.3rem' }}>
+            {SPF_PROVIDERS.map(p => (
+              <label key={p.include} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem', color: '#374151', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={selected.has(p.include)}
+                  onChange={() => toggleProvider(p.include)}
+                  style={{ margin: 0 }}
+                />
+                {p.name}
+                {detectedIncludeSet.has(p.include) && <span style={{ fontSize: '0.7rem', color: '#9ca3af' }}>(detected)</span>}
+              </label>
+            ))}
+          </div>
+
+          {/* Unknown includes from existing record */}
+          {unknownIncludes.length > 0 && (
+            <div style={{ marginTop: '0.5rem' }}>
+              <p style={{ ...s.label, fontSize: '0.7rem' }}>Other includes (from current record)</p>
+              {unknownIncludes.map(inc => (
+                <label key={inc} style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.82rem', color: '#374151', cursor: 'pointer', marginTop: '0.15rem' }}>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(inc)}
+                    onChange={() => toggleProvider(inc)}
+                    style={{ margin: 0 }}
+                  />
+                  <code style={s.inline}>{inc}</code>
+                  <button onClick={() => removeInclude(inc)} style={{ background: 'none', border: 'none', color: '#9ca3af', cursor: 'pointer', fontSize: '0.75rem', padding: '0 0.2rem' }}>✕</button>
+                </label>
+              ))}
+            </div>
+          )}
+
+          {/* Custom include input */}
+          <div style={{ display: 'flex', gap: '0.4rem', marginTop: '0.6rem' }}>
+            <input
+              type="text"
+              value={customInclude}
+              onInput={(e) => setCustomInclude((e.target as HTMLInputElement).value)}
+              onKeyDown={(e) => e.key === 'Enter' && addCustom()}
+              placeholder="custom.provider.com"
+              style={{ flex: 1, padding: '0.4rem 0.6rem', fontSize: '0.82rem', border: '1px solid #d1d5db', borderRadius: '6px', fontFamily: 'monospace' }}
+            />
+            <button onClick={addCustom} disabled={!customInclude.trim()} style={{ ...s.secondaryBtn, padding: '0.4rem 0.75rem', fontSize: '0.8rem', opacity: customInclude.trim() ? 1 : 0.5 }}>
+              Add
+            </button>
+          </div>
+
+          {/* Qualifier toggle */}
+          <div style={{ marginTop: '0.6rem', display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            <span style={{ fontSize: '0.75rem', fontWeight: 600, color: '#6b7280' }}>Qualifier:</span>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.82rem', color: '#374151', cursor: 'pointer' }}>
+              <input type="radio" name="qualifier" checked={qualifier === '~all'} onChange={() => setQualifier('~all')} style={{ margin: 0 }} />
+              ~all <span style={{ fontSize: '0.7rem', color: '#9ca3af' }}>(softfail)</span>
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', fontSize: '0.82rem', color: '#374151', cursor: 'pointer' }}>
+              <input type="radio" name="qualifier" checked={qualifier === '-all'} onChange={() => setQualifier('-all')} style={{ margin: 0 }} />
+              -all <span style={{ fontSize: '0.7rem', color: '#9ca3af' }}>(hardfail)</span>
+            </label>
+          </div>
+
+          {/* Live preview */}
+          {previewRecord && (
+            <div style={{ marginTop: '0.75rem' }}>
+              <p style={s.label}>
+                Preview
+                <span style={{ fontWeight: 400, textTransform: 'none' as const, marginLeft: '0.5rem', color: estimatedLookups > 9 ? '#dc2626' : estimatedLookups >= 8 ? '#d97706' : '#6b7280' }}>
+                  ~{estimatedLookups} / 10 lookups
+                </span>
+              </p>
+              <CodeBlock value={previewRecord} onCopy={() => copy(previewRecord)} copied={copied} />
+              {estimatedLookups > 10 && (
+                <p style={{ ...s.body, color: '#dc2626', fontSize: '0.8rem', marginTop: '0.4rem' }}>
+                  This exceeds the 10-lookup RFC limit. Consider removing providers you don't use, or enable SPF flattening after setup.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Action buttons */}
+          {previewRecord && hasChanges && (
+            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem', flexWrap: 'wrap' }}>
+              {cf_available && (
+                <button
+                  onClick={apply}
+                  disabled={applying}
+                  style={{ ...s.actionBtn, background: SEV_COLOR[sev === 'good' ? 'info' : sev], opacity: applying ? 0.6 : 1 }}
+                >
+                  {applying ? 'Applying…' : 'Apply via Cloudflare'}
+                </button>
+              )}
+              <button onClick={() => copy(previewRecord)} style={s.secondaryBtn}>
+                {copied ? '✓ Copied' : 'Copy record'}
+              </button>
+            </div>
+          )}
+          {applyError && <p style={s.error}>{applyError}</p>}
         </>
       )}
 
-      {sev === 'good' && (
-        <p style={s.body}>
+      {sev === 'good' && !applied && !hasChanges && (
+        <p style={{ ...s.body, marginTop: '0.5rem' }}>
           Your SPF record is healthy. InboxAngel monitors it daily and will alert you if lookup depth increases.
         </p>
       )}
 
-      <StepNav onNext={onNext} onSkip={onSkip} showSkip={sev !== 'good'} />
+      <StepNav onNext={onNext} onSkip={onSkip} showSkip={sev !== 'good' && !applied} />
     </div>
   );
 }

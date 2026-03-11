@@ -172,6 +172,7 @@ export interface OnboardingStatus {
   spf: {
     record: string | null;
     lookup_count: number | null;
+    flattening_active: boolean;
   };
   dkim: {
     selectors: { name: string; record: string }[];
