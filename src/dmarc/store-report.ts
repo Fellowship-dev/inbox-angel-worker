@@ -5,6 +5,7 @@
 import { AggregateReport, ReportRecord as ParserRecord } from './types';
 import { insertAggregateReport, insertReportRecords } from '../db/queries';
 import { ReportRecord as DbRecord } from '../db/types';
+import { sendFirstReportNotification, FirstReportEnv } from '../notifications/first-report';
 
 export interface StoreReportResult {
   stored: boolean;       // false = duplicate, records not re-inserted
@@ -69,12 +70,14 @@ function mapRecord(
  * @param domainId    D1 domains.id for the monitored domain
  * @param report      Parsed AggregateReport from parseDmarcEmail()
  * @param rawXml      Original XML string to store for reprocessing (nullable)
+ * @param env         Full env (optional) — enables first-report notification email
  */
 export async function storeReport(
   db: D1Database,
   domainId: number,
   report: AggregateReport,
   rawXml: string | null = null,
+  env?: FirstReportEnv,
 ): Promise<StoreReportResult> {
   const { total, pass, fail } = computeCounts(report.records);
   const meta = report.report_metadata;
@@ -101,6 +104,29 @@ export async function storeReport(
       db,
       report.records.map(r => mapRecord(r, reportId)),
     );
+  }
+
+  // Fire first-report notification if this is the very first report for this domain
+  if (env) {
+    const countRow = await db.prepare(
+      `SELECT COUNT(*) as cnt FROM aggregate_reports WHERE domain_id = ?`
+    ).bind(domainId).first<{ cnt: number }>();
+
+    if (countRow && countRow.cnt === 1) {
+      const domainRow = await db.prepare(
+        `SELECT domain FROM domains WHERE id = ?`
+      ).bind(domainId).first<{ domain: string }>();
+
+      if (domainRow) {
+        const uniqueSources = new Set(report.records.map(r => r.source.ip));
+        void sendFirstReportNotification(env, domainRow.domain, {
+          totalMessages: total,
+          passMessages: pass,
+          failMessages: fail,
+          sourceCount: uniqueSources.size,
+        })?.catch(() => {}); // fire-and-forget
+      }
+    }
   }
 
   return { stored: true, reportId };
