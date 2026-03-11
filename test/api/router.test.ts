@@ -262,9 +262,8 @@ describe('POST /api/domains', () => {
 
   it('returns 409 on duplicate domain', async () => {
     const env = makeEnv();
-    // getDomainsByCustomer returns empty → then insertDomain throws UNIQUE
+    // insertDomain throws UNIQUE (no DNS provisioning on domain add anymore)
     (env.DB.prepare as any)
-      .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ all: vi.fn().mockResolvedValue({ results: [] }) }) })
       .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({
         run: vi.fn().mockRejectedValue(new Error('UNIQUE constraint failed')),
       }) });
@@ -287,12 +286,18 @@ describe('POST /api/domains', () => {
     expect(body.rua_hint).toContain('rua=mailto:rua@reports.inboxangel.io');
   });
 
-  it('returns 502 when DNS provisioning fails', async () => {
-    vi.mocked(dnsMod.provisionDomain).mockRejectedValueOnce(
-      new dnsMod.DnsProvisionError('Cloudflare rejected DNS record creation: auth error')
-    );
-    const res = await handleApi(req('POST', '/api/domains', { domain: 'acme.com' }), makeEnv(), ctx);
-    expect(res.status).toBe(502);
+  it('does not call provisionDomain on domain add (DNS deferred to wizard)', async () => {
+    const domainRow: Partial<Domain> = { id: 1, domain: 'acme.com', rua_address: 'rua@reports.inboxangel.io', customer_id: 'org_test' };
+    const env = makeEnv();
+    (env.DB.prepare as any).mockReturnValue({
+      bind: vi.fn().mockReturnValue({
+        run:   vi.fn().mockResolvedValue({ success: true, meta: { last_row_id: 1 } }),
+        first: vi.fn().mockResolvedValue(domainRow),
+        all:   vi.fn().mockResolvedValue({ results: [] }),
+      }),
+    });
+    await handleApi(req('POST', '/api/domains', { domain: 'acme.com' }), env, ctx);
+    expect(dnsMod.provisionDomain).not.toHaveBeenCalled();
   });
 
   it('includes auth_record in the 201 response', async () => {
@@ -310,12 +315,7 @@ describe('POST /api/domains', () => {
     expect(body.auth_record).toContain('_report._dmarc.');
   });
 
-  it('returns manual_dns and instructions when CF creds absent', async () => {
-    vi.mocked(dnsMod.provisionDomain).mockResolvedValueOnce({
-      recordId: null,
-      recordName: 'acme.com._report._dmarc.reports.inboxangel.io',
-      manual: true,
-    });
+  it('always returns dns_instructions for manual setup (no auto-provisioning)', async () => {
     const domainRow: Partial<Domain> = { id: 1, domain: 'acme.com', rua_address: 'rua@reports.inboxangel.io', customer_id: 'org_test' };
     const env = makeEnv();
     (env.DB.prepare as any).mockReturnValue({
@@ -328,35 +328,33 @@ describe('POST /api/domains', () => {
     const res = await handleApi(req('POST', '/api/domains', { domain: 'acme.com' }), env, ctx);
     expect(res.status).toBe(201);
     const body = await res.json() as any;
-    expect(body.manual_dns).toBe(true);
     expect(body.dns_instructions).toContain('v=DMARC1;');
+    expect(body.auth_record).toContain('_report._dmarc.');
   });
 });
 
 // ── Self-hosted lazy init ──────────────────────────────────────
 
 describe('BASE_DOMAIN lazy init', () => {
-  it('auto-provisions customer + domain on first authenticated request', async () => {
+  it('creates customer + domain DB rows on first authenticated request (no DNS writes)', async () => {
     const env = { ...makeEnv(), BASE_DOMAIN: 'myco.com' };
-    // ensureCustomerExists flow:
+    // ensureCustomerExists flow (no DNS provisioning):
     // 1. getDomainsByCustomer → empty
     // 2. SELECT admin user (direct prepare().first())
     // 3. upsertCustomer
     // 4. insertDomain
-    // 5. updateDomainDnsRecord (provision returns recordId)
     (env.DB.prepare as any)
       .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ all: vi.fn().mockResolvedValue({ results: [] }) }) }) // getDomainsByCustomer
       .mockReturnValueOnce({ first: vi.fn().mockResolvedValue({ name: 'Admin', email: 'admin@myco.com' }) }) // SELECT users (no bind)
       .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ run: vi.fn().mockResolvedValue({ success: true }) }) }) // upsertCustomer
-      .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ run: vi.fn().mockResolvedValue({ success: true, meta: { last_row_id: 1 } }) }) }) // insertDomain
-      .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ run: vi.fn().mockResolvedValue({ success: true }) }) }); // updateDomainDnsRecord
+      .mockReturnValueOnce({ bind: vi.fn().mockReturnValue({ run: vi.fn().mockResolvedValue({ success: true, meta: { last_row_id: 1 } }) }) }); // insertDomain
     // Actual handler: GET /api/domains → getDomainsByCustomer again
     (env.DB.prepare as any).mockReturnValue({
       bind: vi.fn().mockReturnValue({ all: vi.fn().mockResolvedValue({ results: [] }) }),
     });
     const res = await handleApi(req('GET', '/api/domains'), env, ctx);
     expect(res.status).toBe(200);
-    expect(dnsMod.provisionDomain).toHaveBeenCalledWith(expect.objectContaining({ BASE_DOMAIN: 'myco.com' }), 'myco.com');
+    expect(dnsMod.provisionDomain).not.toHaveBeenCalled();
   });
 
   it('skips lazy init when BASE_DOMAIN is not set', async () => {
