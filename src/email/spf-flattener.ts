@@ -9,9 +9,21 @@
 // Out of scope (MVP): a:, mx:, ptr:, exists: — preserved verbatim if present (rare)
 
 import { getZoneId } from '../env-utils';
+import { logAudit } from '../audit/log';
 
 const CF_API = 'https://api.cloudflare.com/client/v4';
 const DOH_URL = 'https://cloudflare-dns.com/dns-query';
+
+/** Optional audit context for self-logging DNS mutations. */
+export interface SpfAuditOpts {
+  db: D1Database;
+  customer_id: string;
+  domain_name: string;
+  actor_id?: string | null;
+  actor_email?: string | null;
+  actor_type?: 'user' | 'system';
+  ctx?: ExecutionContext;
+}
 
 export interface SpfFlattenResult {
   canonical_record: string;   // the original record we replaced
@@ -145,6 +157,7 @@ export async function updateDnsRecord(
   domain: string,
   newContent: string,
   env: FlattenEnv,
+  audit?: { opts?: SpfAuditOpts; beforeContent?: string },
 ): Promise<void> {
   const res = await fetch(
     `${CF_API}/zones/${getZoneId()}/dns_records/${recordId}`,
@@ -158,6 +171,21 @@ export async function updateDnsRecord(
     const data = await res.json() as { errors?: { message: string }[] };
     const msg = data.errors?.map(e => e.message).join(', ') ?? `HTTP ${res.status}`;
     throw new Error(`CF DNS PATCH failed for ${domain}: ${msg}`);
+  }
+
+  if (audit?.opts) {
+    logAudit(audit.opts.db, {
+      customer_id: audit.opts.customer_id,
+      actor_id: audit.opts.actor_id,
+      actor_email: audit.opts.actor_email,
+      actor_type: audit.opts.actor_type ?? 'system',
+      action: 'dns.update',
+      resource_type: 'dns_record',
+      resource_id: recordId,
+      resource_name: `TXT ${domain}`,
+      before_value: audit.beforeContent ? { content: audit.beforeContent } : undefined,
+      after_value: { content: newContent },
+    }, audit.opts.ctx);
   }
 }
 
@@ -175,6 +203,7 @@ export async function flattenSpf(
   domain: string,
   env: FlattenEnv,
   existingRecordId?: string | null,
+  audit?: SpfAuditOpts,
 ): Promise<SpfFlattenResult> {
   // Step 1: find the live SPF record on CF
   const cfRecord = await findSpfRecord(domain, env);
@@ -195,7 +224,8 @@ export async function flattenSpf(
   const flattened_record = buildFlatRecord(ips, extra, allQualifier);
 
   // Step 4: update CF DNS
-  await updateDnsRecord(cf_record_id, domain, flattened_record, env);
+  await updateDnsRecord(cf_record_id, domain, flattened_record, env,
+    audit ? { opts: audit, beforeContent: canonical_record } : undefined);
 
   return {
     canonical_record,
@@ -214,6 +244,8 @@ export async function restoreSpf(
   cf_record_id: string,
   canonical_record: string,
   env: FlattenEnv,
+  audit?: SpfAuditOpts,
 ): Promise<void> {
-  await updateDnsRecord(cf_record_id, domain, canonical_record, env);
+  await updateDnsRecord(cf_record_id, domain, canonical_record, env,
+    audit ? { opts: audit, beforeContent: undefined } : undefined);
 }

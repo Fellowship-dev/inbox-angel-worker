@@ -1097,6 +1097,23 @@ async function _handleApi(
       });
     }
 
+    // POST /api/setup/email-routing — set up MX records + catch-all rule for reports domain
+    if (path === '/api/setup/email-routing' && method === 'POST') {
+      if (!env.CLOUDFLARE_API_TOKEN || !getZoneId()) return err('Cloudflare credentials not configured', 400);
+      const rd = reportsDomain(env);
+      if (!rd) return err('REPORTS_DOMAIN not configured', 400);
+
+      await ensureEmailRouting(env);
+      logAudit(env.DB!, {
+        customer_id: customerId,
+        actor_id: userBySession?.id ?? null, actor_email: userBySession?.email ?? null, actor_type: 'user',
+        action: 'setup.email_routing',
+        resource_type: 'email_routing', resource_id: rd, resource_name: rd,
+      }, ctx);
+
+      return json({ ok: true, reports_domain: rd });
+    }
+
     // POST /api/domains/:id/apply-dmarc — create or update _dmarc.{domain} TXT in CF DNS
     const applyDmarcMatch = path.match(/^\/api\/domains\/([^/]+)\/apply-dmarc$/);
     if (applyDmarcMatch && method === 'POST') {

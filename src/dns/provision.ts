@@ -13,8 +13,19 @@
 // domains.dns_record_id so we can delete it when the customer removes the domain.
 
 import { getZoneId } from '../env-utils';
+import { logAudit } from '../audit/log';
 
 const CF_API = 'https://api.cloudflare.com/client/v4';
+
+/** Optional audit context — pass to enable self-logging of DNS mutations. */
+export interface DnsAuditOpts {
+  db: D1Database;
+  customer_id: string;
+  actor_id?: string | null;
+  actor_email?: string | null;
+  actor_type?: 'user' | 'system';
+  ctx?: ExecutionContext;
+}
 
 export class DnsProvisionError extends Error {
   constructor(
@@ -55,6 +66,7 @@ function cfHeaders(token: string): Record<string, string> {
 export async function provisionDomain(
   env: ProvisionEnv,
   customerDomain: string,
+  audit?: DnsAuditOpts,
 ): Promise<DnsProvisionResult> {
   // RFC 7489 §7.1 cross-domain authorization record name
   const recordName = `${customerDomain}._report._dmarc.${env.REPORTS_DOMAIN}`;
@@ -91,6 +103,20 @@ export async function provisionDomain(
     throw new DnsProvisionError(`Cloudflare rejected DNS record creation: ${msg}`);
   }
 
+  if (audit) {
+    logAudit(audit.db, {
+      customer_id: audit.customer_id,
+      actor_id: audit.actor_id,
+      actor_email: audit.actor_email,
+      actor_type: audit.actor_type ?? 'user',
+      action: 'dns.create',
+      resource_type: 'dns_record',
+      resource_id: data.result.id,
+      resource_name: recordName,
+      after_value: { type: 'TXT', name: recordName, content: 'v=DMARC1;', ttl: 3600 },
+    }, audit.ctx);
+  }
+
   return { recordId: data.result.id, recordName, manual: false };
 }
 
@@ -101,6 +127,7 @@ export async function provisionDomain(
 export async function deprovisionDomain(
   env: DeprovisionEnv,
   recordId: string,
+  audit?: DnsAuditOpts,
 ): Promise<void> {
   const zoneId = getZoneId();
 
@@ -124,5 +151,18 @@ export async function deprovisionDomain(
   // 404 = already gone (idempotent)
   if (!res.ok && res.status !== 404) {
     console.warn(`deprovisionDomain: unexpected status ${res.status} for record ${recordId}`);
+  }
+
+  if (audit && (res.ok || res.status === 404)) {
+    logAudit(audit.db, {
+      customer_id: audit.customer_id,
+      actor_id: audit.actor_id,
+      actor_email: audit.actor_email,
+      actor_type: audit.actor_type ?? 'user',
+      action: 'dns.delete',
+      resource_type: 'dns_record',
+      resource_id: recordId,
+      before_value: { record_id: recordId },
+    }, audit.ctx);
   }
 }

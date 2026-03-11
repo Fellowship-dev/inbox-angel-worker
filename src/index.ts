@@ -76,7 +76,7 @@ export default {
   },
 
   // Cron dispatcher — routes by schedule expression
-  async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
     if (!env.DB) { console.error('[cron] DB binding missing — D1 not configured'); return; }
     await ensureMigrated(env.DB);
     env = await enrichEnv(env);
@@ -123,7 +123,7 @@ export default {
               before_value: { spf_record: config.flattened_record ?? config.canonical_record },
               after_value: { spf_record: result.flattened_record, ip_count: result.ip_count },
               meta: { cron: '0 10 * * *' },
-            });
+            }, ctx);
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             await updateSpfFlattenError(env.DB, config.domain_id, msg);
@@ -171,7 +171,7 @@ export default {
               before_value: { mx_hosts: storedMx, policy_id: cfg.policy_id },
               after_value: { mx_hosts: liveMx, policy_id: newPolicyId },
               meta: { cron: '0 8 * * *' },
-            });
+            }, ctx);
           }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
