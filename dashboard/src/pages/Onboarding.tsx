@@ -379,6 +379,7 @@ function RoutingStep({ status, onDone, onSkip }: { status: OnboardingStatus; onD
   const [recheckResult, setRecheckResult] = useState<OnboardingStatus['routing'] | null>(null);
   const [settingUp, setSettingUp] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [setupInfo, setSetupInfo] = useState<string | null>(null);
 
   const current = recheckResult ?? routing;
   const currentSev = recheckResult ? routingSeverity(recheckResult) : sev;
@@ -396,8 +397,14 @@ function RoutingStep({ status, onDone, onSkip }: { status: OnboardingStatus; onD
   const setup = async () => {
     setSettingUp(true);
     setSetupError(null);
+    setSetupInfo(null);
     try {
-      await setupEmailRouting();
+      const result = await setupEmailRouting();
+      if (result.status === 'already_configured') {
+        setSetupInfo('Email routing is already configured. MX records may take a few minutes to propagate — try re-checking shortly.');
+      } else if (result.status === 'newly_configured') {
+        setSetupInfo('Email routing configured successfully! MX records created and catch-all rule set.');
+      }
       await recheck();
     } catch (e: any) {
       setSetupError(e.message ?? 'Failed to set up email routing');
@@ -426,6 +433,10 @@ function RoutingStep({ status, onDone, onSkip }: { status: OnboardingStatus; onD
               No MX records found for <code style={s.inline}>{current.reports_domain ?? 'your reports domain'}</code>.
               Email routing needs to be configured so DMARC reports can reach InboxAngel.
             </p>
+            <p style={{ ...s.body, fontSize: '0.85rem', color: '#6b7280', marginTop: '0.25rem' }}>
+              This will: create MX records for your reports subdomain and set a catch-all email routing rule
+              that forwards incoming DMARC reports to the InboxAngel worker.
+            </p>
             <button
               onClick={setup}
               disabled={settingUp}
@@ -434,6 +445,7 @@ function RoutingStep({ status, onDone, onSkip }: { status: OnboardingStatus; onD
               {settingUp ? 'Setting up…' : 'Set up email routing'}
             </button>
             {setupError && <p style={s.error}>{setupError}</p>}
+            {setupInfo && <p style={{ ...s.body, color: '#059669', fontSize: '0.9rem', marginTop: '0.5rem' }}>{setupInfo}</p>}
           </>
         )}
       </div>
@@ -446,10 +458,17 @@ function RoutingStep({ status, onDone, onSkip }: { status: OnboardingStatus; onD
             <code style={s.inline}>{current.admin_email}</code> is verified as a Cloudflare Email Routing destination. Reports will be forwarded to you.
           </p>
         ) : (
-          <p style={s.body}>
-            <code style={s.inline}>{current.admin_email ?? 'Your email'}</code> hasn't been verified as a Cloudflare Email Routing destination yet.
-            Check your inbox for a verification email from Cloudflare and click the link, then press "Re-check" below.
-          </p>
+          <>
+            <p style={s.body}>
+              <code style={s.inline}>{current.admin_email ?? 'Your email'}</code> hasn't been verified as a Cloudflare Email Routing destination yet.
+              Check your inbox for a verification email from Cloudflare and click the link, then press "Re-check" below.
+            </p>
+            {current.destination_debug && (
+              <p style={{ ...s.body, fontSize: '0.8rem', color: '#9ca3af', marginTop: '0.25rem' }}>
+                Debug: {current.destination_debug}
+              </p>
+            )}
+          </>
         )}
       </div>
 

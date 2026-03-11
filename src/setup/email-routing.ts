@@ -70,7 +70,12 @@ export async function registerEmailRoutingDestination(
   }
 }
 
-export async function ensureEmailRouting(env: Env): Promise<void> {
+export interface EmailRoutingResult {
+  status: 'already_configured' | 'newly_configured' | 'skipped';
+  detail: string;
+}
+
+export async function ensureEmailRouting(env: Env): Promise<EmailRoutingResult> {
   const token = env.CLOUDFLARE_API_TOKEN;
   const zoneId = getZoneId();
   const domain = env.REPORTS_DOMAIN;
@@ -78,7 +83,7 @@ export async function ensureEmailRouting(env: Env): Promise<void> {
 
   if (!token || !zoneId || !domain) {
     console.log('[setup] missing CF credentials — skipping email routing setup');
-    return;
+    return { status: 'skipped', detail: 'Cloudflare credentials or reports domain not configured' };
   }
 
   // Step 1: Skip if catch-all rule already points to a worker
@@ -86,7 +91,7 @@ export async function ensureEmailRouting(env: Env): Promise<void> {
     const catchAll = await cfFetch<EmailRule>(token, zoneId, 'GET', '/email/routing/rules/catch_all');
     if (catchAll?.enabled && catchAll.actions.some(a => a.type === 'worker')) {
       console.log('[setup] email routing already configured — skipping');
-      return;
+      return { status: 'already_configured', detail: 'Email routing catch-all rule already active' };
     }
   } catch {
     // catch_all rule doesn't exist yet — continue with setup
@@ -124,4 +129,5 @@ export async function ensureEmailRouting(env: Env): Promise<void> {
     name: `catch-all → ${workerName}`,
   });
   console.log(`[setup] catch-all rule set → ${workerName}`);
+  return { status: 'newly_configured', detail: `MX records + catch-all rule configured for ${domain}` };
 }

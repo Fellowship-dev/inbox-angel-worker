@@ -182,6 +182,7 @@ export interface OnboardingStatus {
   routing: {
     mx_found: boolean;
     destination_verified: boolean;
+    destination_debug?: string;
     reports_domain: string | null;
     admin_email: string | null;
   };

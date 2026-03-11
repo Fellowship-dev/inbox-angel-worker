@@ -252,7 +252,7 @@ export async function logout(): Promise<void> {
   localStorage.removeItem('ia_api_key');
 }
 
-export async function setupEmailRouting(): Promise<{ ok: boolean; reports_domain: string }> {
+export async function setupEmailRouting(): Promise<{ ok: boolean; reports_domain: string; status: string; detail: string }> {
   const res = await apiFetch('/api/setup/email-routing', { method: 'POST' });
   if (!res.ok) await throwApiError(res);
   return res.json();

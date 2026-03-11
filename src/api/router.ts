@@ -982,21 +982,41 @@ async function _handleApi(
 
           // Check if the admin's email is verified as a CF Email Routing destination
           let destination_verified = false;
+          let destination_debug: string | undefined;
           const admin = await env.DB!.prepare(`SELECT email FROM users WHERE role = 'admin' LIMIT 1`).first<{ email: string }>();
           const admin_email = admin?.email ?? null;
           const accountId = getAccountId();
-          if (env.CLOUDFLARE_API_TOKEN && accountId && admin?.email) {
+          if (!env.CLOUDFLARE_API_TOKEN) {
+            destination_debug = 'no CF token';
+          } else if (!accountId) {
+            destination_debug = 'account ID not resolved';
+          } else if (!admin?.email) {
+            destination_debug = 'no admin email found';
+          } else {
             try {
               const destRes = await fetch(
                 `https://api.cloudflare.com/client/v4/accounts/${accountId}/email/routing/addresses`,
                 { headers: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` } }
               );
-              const destData = await destRes.json() as { result?: { email: string; verified?: string }[] };
-              destination_verified = destData.result?.some(d => d.email === admin.email && d.verified) ?? false;
-            } catch {}
+              const destData = await destRes.json() as { success?: boolean; result?: { email: string; verified?: string | null }[]; errors?: { message: string }[] };
+              if (!destData.success) {
+                destination_debug = `CF API error: ${destData.errors?.map(e => e.message).join(', ') ?? 'unknown'}`;
+              } else {
+                const match = destData.result?.find(d => d.email === admin.email);
+                if (!match) {
+                  destination_debug = `email ${admin.email} not found in routing destinations`;
+                } else if (!match.verified) {
+                  destination_debug = 'email found but not yet verified';
+                } else {
+                  destination_verified = true;
+                }
+              }
+            } catch (e) {
+              destination_debug = `fetch error: ${e instanceof Error ? e.message : String(e)}`;
+            }
           }
 
-          return { ...mxResult, destination_verified, admin_email };
+          return { ...mxResult, destination_verified, admin_email, ...(destination_debug ? { destination_debug } : {}) };
         })(),
 
         // DKIM: CF API if available (full zone scan), else DoH for common selectors
@@ -1046,19 +1066,23 @@ async function _handleApi(
       const rd = reportsDomain(env);
       if (!rd) return err('REPORTS_DOMAIN not configured', 400);
 
+      let result;
       try {
-        await ensureEmailRouting(env);
+        result = await ensureEmailRouting(env);
       } catch (e: any) {
         return err(e.message ?? 'Email routing setup failed', 500);
       }
-      logAudit(env.DB!, {
-        customer_id: customerId,
-        actor_id: userBySession?.id ?? null, actor_email: userBySession?.email ?? null, actor_type: 'user',
-        action: 'setup.email_routing',
-        resource_type: 'email_routing', resource_id: rd, resource_name: rd,
-      }, ctx);
+      if (result.status !== 'skipped') {
+        logAudit(env.DB!, {
+          customer_id: customerId,
+          actor_id: userBySession?.id ?? null, actor_email: userBySession?.email ?? null, actor_type: 'user',
+          action: 'setup.email_routing',
+          resource_type: 'email_routing', resource_id: rd, resource_name: rd,
+          meta: { routing_status: result.status },
+        }, ctx);
+      }
 
-      return json({ ok: true, reports_domain: rd });
+      return json({ ok: true, reports_domain: rd, status: result.status, detail: result.detail });
     }
 
     // POST /api/domains/:id/apply-dmarc — create or update _dmarc.{domain} TXT in CF DNS
