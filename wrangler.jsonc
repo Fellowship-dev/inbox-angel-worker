@@ -5,8 +5,6 @@
 	// 3. Set REPORTS_DOMAIN to the subdomain you'll receive reports on
 	//    (e.g. "reports.yourdomain.com") — must be on your CF zone
 	// 4. Set FROM_EMAIL to any address on that domain
-	// 5. Set CUSTOMER_DOMAIN, CUSTOMER_EMAIL, CUSTOMER_NAME below
-	//    (auto-provisioned on first authenticated request — no API call needed)
 	//
 	// ── DEPLOY token (wrangler deploy + D1 migrations) ─────────────────────────
 	//    Create at: dash.cloudflare.com → My Profile → API Tokens
@@ -26,7 +24,7 @@
 	//    Zone scope (All zones):
 	//      • Zone                : Read  ← auto-discover zone ID + account ID at runtime
 	//      • Email Routing Rules : Edit  ← enable routing, set catch-all rule
-	//      • DNS                 : Edit  ← MX records for subdomain + per-customer TXT records
+	//      • DNS                 : Edit  ← MX records for subdomain + DMARC authorization TXT records
 	//      • Workers Routes      : Edit
 	//    Run once: CLOUDFLARE_EMAIL_TOKEN=<token> REPORTS_DOMAIN=<domain> npx tsx scripts/setup-email-routing.ts
 	//      → enables Email Routing on the zone
@@ -44,8 +42,6 @@
 	//    That's it — everything else auto-derives:
 	//      REPORTS_DOMAIN     = reports.<BASE_DOMAIN>                 (override: wrangler secret put REPORTS_DOMAIN)
 	//      FROM_EMAIL         = noreply@reports.<BASE_DOMAIN>         (override: wrangler secret put FROM_EMAIL)
-	//      CUSTOMER_NAME      = "Self-hosted"                         (override: wrangler secret put CUSTOMER_NAME)
-	//      CUSTOMER_EMAIL     = <FROM_EMAIL>                          (override: wrangler secret put CUSTOMER_EMAIL)
 	// 7. Create workers.dev subdomain (required for cron scheduling — no dashboard visit needed):
 	//      curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/<account_id>/workers/subdomain" \
 	//        -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
@@ -74,7 +70,7 @@
 		{
 			"binding": "DB",
 			"database_name": "inbox-angel",      // ← step 3a: change to your DB name
-			"database_id": "cf18a05c-9f6c-4f38-a43c-d85037d17534",   // ← step 3b: from: wrangler d1 create <name>
+			"database_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",   // ← step 3b: from: wrangler d1 create <name> (auto-created by Deploy button)
 			"migrations_dir": "migrations"
 		}
 	],
@@ -88,7 +84,7 @@
 
 	// Outbound email — requires CF Email Routing enabled on your zone.
 	// Recipients must be verified destination addresses in CF Email Routing.
-	// For self-hosting: verify your CUSTOMER_EMAIL in CF dashboard → Email → Routing → Destinations.
+	// For self-hosting: verify your admin email in CF dashboard → Email → Routing → Destinations.
 	"send_email": [
 		{
 			"name": "SEND_EMAIL"
@@ -125,7 +121,7 @@
 		"WORKER_NAME": "inbox-angel-worker",  // must match the "name" field above
 		"TELEMETRY_ENABLED": "false",         // set to "true" to send anonymous usage stats
 		"DEBUG": "false",                     // set to "true" for verbose logs in CF Workers Logs
-		"BASE_DOMAIN": "fellowship.dev"       // required — e.g. "yourdomain.com"
+		"BASE_DOMAIN": ""                     // required — set via: wrangler secret put BASE_DOMAIN (e.g. "yourdomain.com")
 		// Required secret: CLOUDFLARE_API_TOKEN (see README for token permissions)
 		// Optional overrides (wrangler secret put <NAME>):
 		//   REPORTS_DOMAIN  — override reports subdomain (defaults to reports.<BASE_DOMAIN>)
