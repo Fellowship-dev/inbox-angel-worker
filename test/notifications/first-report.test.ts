@@ -103,12 +103,12 @@ describe('sendFirstReportNotification', () => {
     expect(call.text).toContain('https://mail.example.org');
   });
 
-  it('falls back to inboxangel.io when no custom_domain', async () => {
+  it('falls back to workers.dev when no custom_domain', async () => {
     const env = makeEnv({ customDomain: null });
     await sendFirstReportNotification(env, 'acme.com', STATS);
 
     const call = (env.SEND_EMAIL!.send as any).mock.calls[0][0];
-    expect(call.text).toContain('https://inboxangel.io');
+    expect(call.text).toContain('https://inbox-angel-worker.workers.dev');
   });
 
   it('logs instead of sending when SEND_EMAIL binding is absent', async () => {

@@ -8,6 +8,7 @@ import { fromEmail } from '../env-utils';
 export interface FirstReportEnv {
   DB: D1Database;
   SEND_EMAIL?: SendEmail;
+  WORKER_NAME?: string;
 }
 
 export interface ReportStats {
@@ -58,12 +59,13 @@ export async function sendFirstReportNotification(
   domain: string,
   reportStats: ReportStats,
 ): Promise<void> {
-  // Resolve dashboard URL: custom domain > workers.dev > fallback
+  // Resolve dashboard URL: custom domain > workers.dev
   const customDomain = await env.DB.prepare(`SELECT value FROM settings WHERE key = 'custom_domain'`)
     .first<{ value: string }>();
+  const workerName = env.WORKER_NAME ?? 'inbox-angel-worker';
   const dashboardUrl = customDomain?.value
     ? `https://${customDomain.value}`
-    : 'https://inboxangel.io';
+    : `https://${workerName}.workers.dev`;
 
   // Get admin user email
   const admin = await env.DB.prepare(`SELECT email, name FROM users WHERE role = 'admin' LIMIT 1`)
