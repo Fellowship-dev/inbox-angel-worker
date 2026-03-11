@@ -169,7 +169,7 @@ export function Overview({ onUnauthorized }: Props) {
               </span>
               {setupIncomplete && (
                 <a
-                  href={`#/onboarding`}
+                  href={`#/domains/${domain.id}/setup/1`}
                   onClick={(e: Event) => e.stopPropagation()}
                   style={{ fontSize: '0.7rem', color: '#d97706', textDecoration: 'none' }}
                 >

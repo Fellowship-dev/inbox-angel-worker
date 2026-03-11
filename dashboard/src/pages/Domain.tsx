@@ -199,7 +199,7 @@ export function DomainDetail({ id, onUnauthorized }: Props) {
         const done = Object.values(wizardState).filter(v => v === 'complete').length;
         const total_ = Object.values(wizardState).length;
         return (
-          <a href="#/onboarding" style={{
+          <a href={`#/domains/${id}/setup/1`} style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
             gap: '0.75rem', flexWrap: 'wrap',
             background: '#fffbeb', border: '1px solid #fde68a',

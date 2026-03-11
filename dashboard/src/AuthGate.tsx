@@ -82,7 +82,7 @@ function SetupDone({ email, emailVerificationSent, onContinue }: {
   useEffect(() => {
     if (countdown === null || !hostname) return;
     if (countdown <= 0) {
-      window.location.href = `https://${hostname}/#/onboarding`;
+      window.location.href = `https://${hostname}/#/setup`;
       return;
     }
     const t = setTimeout(() => setCountdown(c => (c ?? 1) - 1), 1000);
@@ -346,7 +346,7 @@ export function AuthGate({ onSave }: Props) {
       email={email}
       emailVerificationSent={emailVerificationSent}
       onContinue={() => {
-        window.location.hash = '#/onboarding';
+        window.location.hash = '#/setup';
         onSave(pendingToken);
       }}
     />;

@@ -120,11 +120,16 @@ export function App() {
 
   if (!hasKey) return <AuthGate onSave={() => setHasKey(true)} />;
 
-  // Onboarding wizard — full-screen, no nav shell
-  const onboardingMatch = route.match(/^\/onboarding(?:\/(\d+))?$/);
-  if (onboardingMatch) {
-    const stepFromUrl = onboardingMatch[1] !== undefined ? parseInt(onboardingMatch[1], 10) : undefined;
-    return <Onboarding initialStep={stepFromUrl} />;
+  // Setup wizard — /domains/:id/setup/:step (1-indexed) or /setup (auto-resolve domain)
+  const setupMatch = route.match(/^\/domains\/(\d+)\/setup(?:\/(\d+))?$/);
+  if (setupMatch) {
+    const domainIdFromUrl = parseInt(setupMatch[1], 10);
+    const stepFromUrl = setupMatch[2] !== undefined ? parseInt(setupMatch[2], 10) : undefined;
+    return <Onboarding domainId={domainIdFromUrl} initialStep={stepFromUrl} />;
+  }
+  // Legacy /onboarding or /setup — resolve domain and redirect
+  if (route === '/setup' || route.startsWith('/onboarding')) {
+    return <Onboarding />;
   }
 
   return (

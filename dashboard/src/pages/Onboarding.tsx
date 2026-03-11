@@ -500,9 +500,11 @@ const STEPS = ['SPF', 'DKIM', 'DMARC', 'Routing'];
 const STEP_KEYS: (keyof WizardState)[] = ['spf', 'dkim', 'dmarc', 'routing'];
 const DEFAULT_WIZARD: WizardState = { spf: 'not_started', dkim: 'not_started', dmarc: 'not_started', routing: 'not_started' };
 
-export function Onboarding({ initialStep }: { initialStep?: number } = {}) {
-  const [step, setStepRaw] = useState(initialStep ?? 0);
-  const [domainId, setDomainId] = useState<number | null>(null);
+export function Onboarding({ domainId: domainIdProp, initialStep }: { domainId?: number; initialStep?: number } = {}) {
+  // Steps are 1-indexed in the URL, 0-indexed internally
+  const initialInternal = initialStep !== undefined ? initialStep - 1 : undefined;
+  const [step, setStepRaw] = useState(initialInternal ?? 0);
+  const [domainId, setDomainId] = useState<number | null>(domainIdProp ?? null);
   const [status, setStatus] = useState<OnboardingStatus | null>(null);
   const [wizardState, setWizardState] = useState<WizardState>(DEFAULT_WIZARD);
   const [loading, setLoading] = useState(true);
@@ -511,7 +513,9 @@ export function Onboarding({ initialStep }: { initialStep?: number } = {}) {
   const setStep = (s: number | ((prev: number) => number)) => {
     setStepRaw(prev => {
       const next = typeof s === 'function' ? s(prev) : s;
-      window.location.hash = `#/onboarding/${next}`;
+      if (domainId) {
+        window.location.hash = `#/domains/${domainId}/setup/${next + 1}`;
+      }
       return next;
     });
   };
@@ -520,9 +524,16 @@ export function Onboarding({ initialStep }: { initialStep?: number } = {}) {
     let cancelled = false;
     (async () => {
       try {
-        const { domains } = await getDomains();
-        if (domains.length === 0) { done(); return; }
-        const id = domains[0].id;
+        let id = domainIdProp ?? null;
+        if (!id) {
+          // No domain ID in URL — resolve from API and redirect
+          const { domains } = await getDomains();
+          if (domains.length === 0) { done(); return; }
+          id = domains[0].id;
+          // Redirect to proper URL
+          window.location.hash = `#/domains/${id}/setup/1`;
+          return;
+        }
         setDomainId(id);
 
         const [statusData, wizardData] = await Promise.all([
@@ -539,7 +550,7 @@ export function Onboarding({ initialStep }: { initialStep?: number } = {}) {
           const firstIncomplete = STEP_KEYS.findIndex(k => wizardData[k] === 'not_started');
           if (firstIncomplete > 0) {
             setStepRaw(firstIncomplete);
-            window.location.hash = `#/onboarding/${firstIncomplete}`;
+            window.location.hash = `#/domains/${id}/setup/${firstIncomplete + 1}`;
           }
         }
       } catch (e: any) {
@@ -553,7 +564,8 @@ export function Onboarding({ initialStep }: { initialStep?: number } = {}) {
 
   const done = () => {
     localStorage.setItem('ia_onboarding_done', '1');
-    window.location.hash = domainId ? `#/domains/${domainId}` : '#/';
+    const id = domainId ?? domainIdProp;
+    window.location.hash = id ? `#/domains/${id}` : '#/';
   };
 
   const markAndAdvance = async (state: WizardStepState) => {
