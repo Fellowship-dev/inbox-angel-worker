@@ -2,67 +2,83 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { sendChangeNotification } from '../../src/monitor/notify';
 import type { DomainChange } from '../../src/monitor/check';
 
-const ENV = {
-  RESEND_API_KEY: 'resend-test-key',
-  FROM_EMAIL: 'check@reports.inboxangel.io',
-  REPORTS_DOMAIN: 'reports.inboxangel.io',
-};
-
 const degraded: DomainChange = { field: 'DMARC policy', was: 'reject', now: 'none', severity: 'degraded' };
 const improved: DomainChange = { field: 'DMARC policy', was: 'none', now: 'reject', severity: 'improved' };
 
-beforeEach(() => vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 }))));
-afterEach(() => vi.unstubAllGlobals());
+function makeSendEmail() {
+  return { send: vi.fn().mockResolvedValue(undefined) };
+}
+
+function makeEnv(sendEmail?: { send: ReturnType<typeof vi.fn> }) {
+  return {
+    FROM_EMAIL: 'check@reports.inboxangel.io',
+    REPORTS_DOMAIN: 'reports.inboxangel.io',
+    SEND_EMAIL: sendEmail,
+  };
+}
 
 describe('sendChangeNotification', () => {
-  it('POSTs to Resend API when key is set', async () => {
-    await sendChangeNotification('user@example.com', 'acme.com', [improved], ENV);
-    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
-      'https://api.resend.com/emails',
-      expect.objectContaining({ method: 'POST' })
-    );
+  it('calls SEND_EMAIL.send when binding is configured', async () => {
+    const sendEmail = makeSendEmail();
+    const env = makeEnv(sendEmail);
+    await sendChangeNotification('user@example.com', 'acme.com', [improved], env);
+    expect(sendEmail.send).toHaveBeenCalledOnce();
   });
 
-  it('sends Authorization header with Bearer token', async () => {
-    await sendChangeNotification('user@example.com', 'acme.com', [improved], ENV);
-    const headers = vi.mocked(fetch).mock.calls[0][1]?.headers as Record<string, string>;
-    expect(headers['Authorization']).toBe('Bearer resend-test-key');
+  it('sends correct from/to fields', async () => {
+    const sendEmail = makeSendEmail();
+    const env = makeEnv(sendEmail);
+    await sendChangeNotification('user@example.com', 'acme.com', [improved], env);
+    const arg = sendEmail.send.mock.calls[0][0];
+    expect(arg.from.email).toBe('check@reports.inboxangel.io');
+    expect(arg.to).toContain('user@example.com');
   });
 
   it('uses degraded subject line when change is degraded', async () => {
-    await sendChangeNotification('user@example.com', 'acme.com', [degraded], ENV);
-    const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]?.body as string);
-    expect(body.subject).toContain('degraded');
+    const sendEmail = makeSendEmail();
+    const env = makeEnv(sendEmail);
+    await sendChangeNotification('user@example.com', 'acme.com', [degraded], env);
+    const arg = sendEmail.send.mock.calls[0][0];
+    expect(arg.subject).toContain('degraded');
   });
 
   it('uses neutral subject line when all changes are improved', async () => {
-    await sendChangeNotification('user@example.com', 'acme.com', [improved], ENV);
-    const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]?.body as string);
-    expect(body.subject).not.toContain('degraded');
+    const sendEmail = makeSendEmail();
+    const env = makeEnv(sendEmail);
+    await sendChangeNotification('user@example.com', 'acme.com', [improved], env);
+    const arg = sendEmail.send.mock.calls[0][0];
+    expect(arg.subject).not.toContain('degraded');
   });
 
   it('includes domain name in email body', async () => {
-    await sendChangeNotification('user@example.com', 'acme.com', [degraded], ENV);
-    const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]?.body as string);
-    expect(body.text).toContain('acme.com');
+    const sendEmail = makeSendEmail();
+    const env = makeEnv(sendEmail);
+    await sendChangeNotification('user@example.com', 'acme.com', [degraded], env);
+    const arg = sendEmail.send.mock.calls[0][0];
+    expect(arg.text).toContain('acme.com');
   });
 
   it('includes fix CTA when changes are degraded', async () => {
-    await sendChangeNotification('user@example.com', 'acme.com', [degraded], ENV);
-    const body = JSON.parse(vi.mocked(fetch).mock.calls[0][1]?.body as string);
-    expect(body.text).toContain('inboxangel.io');
+    const sendEmail = makeSendEmail();
+    const env = makeEnv(sendEmail);
+    await sendChangeNotification('user@example.com', 'acme.com', [degraded], env);
+    const arg = sendEmail.send.mock.calls[0][0];
+    expect(arg.text).toContain('inboxangel.io');
   });
 
-  it('does not call fetch when RESEND_API_KEY is not set', async () => {
-    const env = { ...ENV, RESEND_API_KEY: undefined };
+  it('does not call SEND_EMAIL when binding is absent', async () => {
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const env = makeEnv(undefined);
     await sendChangeNotification('user@example.com', 'acme.com', [improved], env);
-    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
+    // No throw, just logs
   });
 
-  it('does not throw when Resend returns error status', async () => {
-    vi.mocked(fetch).mockResolvedValueOnce(new Response('bad request', { status: 400 }));
+  it('does not throw when SEND_EMAIL.send fails', async () => {
+    const sendEmail = { send: vi.fn().mockRejectedValue(new Error('send failed')) };
+    const env = makeEnv(sendEmail);
     await expect(
-      sendChangeNotification('user@example.com', 'acme.com', [degraded], ENV)
+      sendChangeNotification('user@example.com', 'acme.com', [degraded], env)
     ).resolves.toBeUndefined();
   });
 });

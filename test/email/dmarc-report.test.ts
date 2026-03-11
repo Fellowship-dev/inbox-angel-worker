@@ -146,7 +146,8 @@ describe('handleDmarcReport — happy path', () => {
 
     await handleDmarcReport(makeMessage(), makeEnv());
 
-    expect(parseEmailMod.parseDmarcEmail).toHaveBeenCalledWith(fakeBytes);
+    // parseDmarcEmail now takes (bytes, offline, db)
+    expect(parseEmailMod.parseDmarcEmail).toHaveBeenCalledWith(fakeBytes, false, expect.anything());
   });
 
   it('calls storeReport with correct customer + domain ids', async () => {
@@ -194,7 +195,8 @@ describe('handleDmarcReport — happy path', () => {
   it('does not throw when storeReport returns stored=false (duplicate)', async () => {
     vi.mocked(storeReportMod.storeReport).mockResolvedValue({ stored: false });
     const message = makeMessage();
-    await expect(handleDmarcReport(message, makeEnv())).resolves.toBeUndefined();
+    const result = await handleDmarcReport(message, makeEnv());
+    expect(result).toHaveProperty('failure_count');
     expect(message.setReject).not.toHaveBeenCalled();
   });
 });
@@ -279,8 +281,7 @@ describe('handleDmarcReport — error paths', () => {
 
   it('resolves without throwing when storeReport fails', async () => {
     vi.mocked(storeReportMod.storeReport).mockRejectedValue(new Error('D1 unavailable'));
-    await expect(
-      handleDmarcReport(makeMessage(), makeEnv())
-    ).resolves.toBeUndefined();
+    const result = await handleDmarcReport(makeMessage(), makeEnv());
+    expect(result).toHaveProperty('failure_count');
   });
 });

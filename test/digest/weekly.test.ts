@@ -128,32 +128,32 @@ describe('sendWeeklyDigests', () => {
     expect(queries.getTopFailingSources).not.toHaveBeenCalled();
   });
 
-  it('sends email via Resend when API key is set', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
-    vi.stubGlobal('fetch', fetchMock);
-    await sendWeeklyDigests({ ...makeEnv(), RESEND_API_KEY: 're_test' });
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://api.resend.com/emails',
-      expect.objectContaining({ method: 'POST' })
-    );
+  it('sends email via SEND_EMAIL binding when configured', async () => {
+    // fetchLatestVersion calls fetch — stub it
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
+    const sendEmail = { send: vi.fn().mockResolvedValue(undefined) };
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await sendWeeklyDigests({ ...makeEnv(), SEND_EMAIL: sendEmail } as any);
+    expect(sendEmail.send).toHaveBeenCalledOnce();
+    consoleSpy.mockRestore();
   });
 
-  it('logs instead of sending when RESEND_API_KEY is absent', async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
+  it('logs instead of sending when SEND_EMAIL binding is absent', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
     const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-    await sendWeeklyDigests(makeEnv()); // no RESEND_API_KEY
-    expect(fetchMock).not.toHaveBeenCalled();
+    await sendWeeklyDigests(makeEnv()); // no SEND_EMAIL
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('would send to admin@acme.com'));
     consoleSpy.mockRestore();
   });
 
   it('skips customers with no domains', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('{}', { status: 200 })));
     vi.mocked(queries.getWeeklyDomainStats).mockResolvedValue({ results: [] } as any);
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
-    await sendWeeklyDigests(makeEnv());
-    expect(fetchMock).not.toHaveBeenCalled();
+    const sendEmail = { send: vi.fn() };
+    const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await sendWeeklyDigests({ ...makeEnv(), SEND_EMAIL: sendEmail } as any);
+    expect(sendEmail.send).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
   });
 
   it('continues to next customer when one fails', async () => {

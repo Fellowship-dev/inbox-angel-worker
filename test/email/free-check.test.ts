@@ -210,7 +210,8 @@ describe('handleFreeCheck', () => {
 
     const env = makeEnv({ DB: brokenDb });
     // Should not throw — DB failure is swallowed with console.error
-    await expect(handleFreeCheck(message, env, 'test-token')).resolves.toBeUndefined();
+    const result = await handleFreeCheck(message, env, 'test-token');
+    expect(result).toHaveProperty('result');
     expect(message.reply).toHaveBeenCalledOnce();
   });
 });

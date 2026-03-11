@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Mock getZoneId — it reads from a module-level cache that tests never populate
+vi.mock('../../src/env-utils', async (importOriginal) => {
+  const actual = await importOriginal() as Record<string, unknown>;
+  return { ...actual, getZoneId: vi.fn().mockReturnValue('zone-abc') };
+});
+
 import { provisionDomain, deprovisionDomain, DnsProvisionError } from '../../src/dns/provision';
+import { getZoneId } from '../../src/env-utils';
 
 const ENV = {
   CLOUDFLARE_API_TOKEN: 'test-token',
@@ -13,7 +21,10 @@ function mockFetch(status: number, body: unknown): void {
   ));
 }
 
-beforeEach(() => vi.unstubAllGlobals());
+beforeEach(() => {
+  vi.unstubAllGlobals();
+  vi.mocked(getZoneId).mockReturnValue('zone-abc');
+});
 
 // ── provisionDomain ───────────────────────────────────────────
 
@@ -80,6 +91,7 @@ describe('provisionDomain', () => {
   });
 
   it('returns manual result when CF credentials are not configured', async () => {
+    vi.mocked(getZoneId).mockReturnValue(undefined);
     const bare = { CLOUDFLARE_API_TOKEN: '', CLOUDFLARE_ZONE_ID: '', REPORTS_DOMAIN: 'r.io' };
     const result = await provisionDomain(bare, 'acme.com');
     expect(result.manual).toBe(true);
@@ -111,6 +123,7 @@ describe('deprovisionDomain', () => {
   });
 
   it('resolves without calling fetch when credentials are not configured', async () => {
+    vi.mocked(getZoneId).mockReturnValue(undefined);
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     const bare = { CLOUDFLARE_API_TOKEN: '', CLOUDFLARE_ZONE_ID: '' };
