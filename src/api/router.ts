@@ -103,7 +103,8 @@ import { track } from '../telemetry';
 import { reportsDomain, fromEmail, enrichEnv, getZoneId, getAccountId, getBaseDomain, resetEnvCache } from '../env-utils';
 import { logAudit } from '../audit/log';
 import { flattenSpf, restoreSpf } from '../email/spf-flattener';
-import { lookupSpf } from '../email/dns-check';
+import { lookupSpf, countSpfLookupsFromRecord } from '../email/dns-check';
+import { getAllDkimSelectors } from '../../dashboard/src/email-service-providers';
 import {
   provisionMtaSts,
   updateMtaStsTxtRecord,
@@ -958,7 +959,7 @@ async function _handleApi(
       if (!domain) return err('domain not found', 404);
 
       const rd = reportsDomain();
-      const DKIM_SELECTORS = ['google', 'selector1', 'selector2', 'mail', 'default', 'k1', 'dkim', 'mandrill', 'mailjet', 'sendgrid', 'smtp', 'pm', 'brevo', 'resend', 'mxroute', 'zoho'];
+      const DKIM_SELECTORS = getAllDkimSelectors();
 
       const [spfLiveData, dmarcData, routingData, dkimData] = await Promise.all([
         // SPF: DoH lookup for {domain} TXT records → find v=spf1
@@ -1154,6 +1155,15 @@ async function _handleApi(
       }, ctx);
 
       return json({ ok: true, record: body.record, created: !existingId });
+    }
+
+    // POST /api/spf-lookup-count — count real DNS lookups for an arbitrary SPF record
+    if (path === '/api/spf-lookup-count' && method === 'POST') {
+      const body = await parseBody<{ record?: string }>(request);
+      if (!body.record) return err('record is required', 400);
+      if (!body.record.startsWith('v=spf1')) return err('SPF record must start with v=spf1', 400);
+      const lookup_count = await countSpfLookupsFromRecord(body.record);
+      return json({ lookup_count });
     }
 
     // POST /api/domains/:id/apply-spf — create or update SPF TXT record in CF DNS
