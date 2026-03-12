@@ -960,7 +960,7 @@ async function _handleApi(
       const rd = reportsDomain();
       const DKIM_SELECTORS = ['google', 'selector1', 'selector2', 'mail', 'default', 'k1', 'dkim', 'mandrill', 'mailjet', 'sendgrid', 'smtp', 'pm', 'brevo', 'resend', 'mxroute', 'zoho'];
 
-      const [dmarcData, routingData, dkimData, spfLiveData] = await Promise.all([
+      const [spfLiveData, dmarcData, routingData, dkimData] = await Promise.all([
         // SPF: DoH lookup for {domain} TXT records → find v=spf1
         fetch(`https://cloudflare-dns.com/dns-query?name=${domain.domain}&type=TXT`, { headers: { Accept: 'application/dns-json' } })
           .then(r => r.json() as Promise<{ Answer?: { data: string }[] }>)
