@@ -408,23 +408,12 @@ function SpfStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext:
         <h2 style={s.stepTitle}>SPF record</h2>
       </div>
 
-      {spf.record && !applied && (
-        <div style={{ marginBottom: '0.75rem' }}>
-          <p style={s.label}>Current record</p>
-          <CodeBlock value={spf.record} onCopy={() => copy(spf.record!)} copied={copied} />
-          {spf.lookup_count !== null && (
-            <p style={{ ...s.body, marginTop: '0.4rem' }}>
-              DNS lookup depth: <strong style={{ color: SEV_COLOR[sev] }}>{count} / 10</strong>
-              {count > 9 && ' — over the limit, receiving servers may reject your mail'}
-              {count >= 8 && count <= 9 && ' — getting close to the limit'}
-              {count < 8 && ' — healthy'}
-            </p>
-          )}
-        </div>
-      )}
-
-      {!spf.record && !applied && (
-        <p style={s.body}>No SPF record found. Without SPF, any server can claim to send email as you. Select your email providers below to create one.</p>
+      {!applied && (
+        <p style={{ ...s.body, marginBottom: '0.5rem' }}>
+          {spf.record
+            ? 'SPF tells receiving mail servers which services are allowed to send email on your behalf. Select the providers you use below — we auto-detected what you have.'
+            : 'No SPF record found. Without SPF, any server can claim to send email as you. Select your email providers below to create one.'}
+        </p>
       )}
 
       {applied ? (
@@ -484,10 +473,10 @@ function SpfStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext:
           {previewRecord && (
             <div style={{ marginTop: '0.75rem' }}>
               {spf.record && hasChanges ? (
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
                   <div>
                     <p style={{ ...s.label, color: '#9ca3af' }}>Current DNS record</p>
-                    <div style={{ background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '6px', padding: '0.5rem', fontFamily: 'monospace', fontSize: '0.75rem', wordBreak: 'break-all' as const, color: '#991b1b' }}>
+                    <div style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '6px', padding: '0.5rem', fontFamily: 'monospace', fontSize: '0.75rem', wordBreak: 'break-all' as const, color: '#6b7280' }}>
                       {spf.record}
                     </div>
                     {spf.lookup_count !== null && (
