@@ -54,7 +54,8 @@ function dkimSeverity(d: OnboardingStatus['dkim'], dmarcPolicy: string | null, u
 }
 
 function routingSeverity(r: OnboardingStatus['routing']): Severity {
-  if (r.mx_found && r.destination_verified) return 'good';
+  const allGood = r.mx_found && r.destination_verified && r.null_sender_spf && r.null_sender_dmarc;
+  if (allGood) return 'good';
   if (r.mx_found || r.destination_verified) return 'warning';
   return 'error';
 }
@@ -580,14 +581,21 @@ function DkimStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext
   const currentDkim = rescanStatus?.dkim ?? dkim;
   const currentSpf = rescanStatus?.spf.record ?? spfRecord;
 
-  // Classify selectors
-  const signed: { sel: typeof currentDkim.selectors[0]; provider: EmailProvider }[] = [];
+  // Classify selectors and group signed ones by provider
+  const signedByProvider = new Map<string, { provider: EmailProvider; selectors: string[] }>();
   const unknown: typeof currentDkim.selectors = [];
   for (const sel of currentDkim.selectors) {
     const provider = matchDkimProvider(sel.name);
-    if (provider) signed.push({ sel, provider });
-    else unknown.push(sel);
+    if (provider) {
+      const existing = signedByProvider.get(provider.name);
+      const selectorPrefix = sel.name.replace(/\._domainkey.*$/, '');
+      if (existing) existing.selectors.push(selectorPrefix);
+      else signedByProvider.set(provider.name, { provider, selectors: [selectorPrefix] });
+    } else {
+      unknown.push(sel);
+    }
   }
+  const signedProviders = [...signedByProvider.values()];
   const unsigned = findUnsignedSpfProviders(currentDkim.selectors, currentSpf);
   const currentSev = dkimSeverity(currentDkim, dmarcPolicy, unsigned.length);
 
@@ -608,24 +616,19 @@ function DkimStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext
         <h2 style={s.stepTitle}>DKIM signing</h2>
       </div>
 
-      {/* Signed senders */}
-      {signed.length > 0 && (
+      {/* Signed senders — grouped by provider */}
+      {signedProviders.length > 0 && (
         <>
           <p style={s.body}>
-            {signed.length} signed sender{signed.length > 1 ? 's' : ''} detected:
+            {signedProviders.length} signed provider{signedProviders.length > 1 ? 's' : ''} detected:
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.5rem' }}>
-            {signed.map(({ sel, provider }) => (
-              <div key={sel.name} style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px', padding: '0.5rem 0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.25rem' }}>
-                <span>
-                  <strong style={{ fontSize: '0.85rem', color: '#15803d' }}>{provider.name}</strong>
-                  <code style={{ fontSize: '0.72rem', color: '#6b7280', fontFamily: 'monospace', marginLeft: '0.5rem' }}>{sel.name}</code>
-                </span>
-                {provider.dkimGuideUrl && (
-                  <a href={provider.dkimGuideUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.75rem', color: '#2563eb' }}>
-                    Setup guide
-                  </a>
-                )}
+            {signedProviders.map(({ provider, selectors }) => (
+              <div key={provider.name} style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px', padding: '0.5rem 0.75rem' }}>
+                <strong style={{ fontSize: '0.85rem', color: '#15803d' }}>{provider.name}</strong>
+                <code style={{ fontSize: '0.72rem', color: '#6b7280', fontFamily: 'monospace', marginLeft: '0.5rem' }}>
+                  {selectors.join(', ')}
+                </code>
               </div>
             ))}
           </div>
@@ -635,7 +638,7 @@ function DkimStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext
       {/* Possibly unsigned — SPF providers with no matching DKIM */}
       {unsigned.length > 0 && (
         <>
-          <p style={{ ...s.body, marginTop: signed.length > 0 ? '0.75rem' : 0 }}>
+          <p style={{ ...s.body, marginTop: signedProviders.length > 0 ? '0.75rem' : 0 }}>
             {unsigned.length} provider{unsigned.length > 1 ? 's' : ''} in your SPF record {unsigned.length > 1 ? 'appear' : 'appears'} to be missing DKIM:
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.5rem' }}>
@@ -656,7 +659,7 @@ function DkimStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext
       {/* Unknown selectors */}
       {unknown.length > 0 && (
         <>
-          <p style={{ ...s.body, marginTop: (signed.length > 0 || unsigned.length > 0) ? '0.75rem' : 0 }}>
+          <p style={{ ...s.body, marginTop: (signedProviders.length > 0 || unsigned.length > 0) ? '0.75rem' : 0 }}>
             {unknown.length} unrecognised selector{unknown.length > 1 ? 's' : ''}:
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.5rem' }}>
@@ -917,6 +920,35 @@ function RoutingStep({ status, onDone, onSkip }: { status: OnboardingStatus; onD
                 Debug: {current.destination_debug}
               </p>
             )}
+          </>
+        )}
+      </div>
+
+      {/* Null-sender protection */}
+      <div style={{ marginBottom: '0.75rem' }}>
+        <p style={s.label}>Subdomain protection</p>
+        {current.null_sender_spf && current.null_sender_dmarc ? (
+          <p style={s.body}>
+            <code style={s.inline}>{current.reports_domain}</code> has null-sender SPF and DMARC records — it cannot be spoofed.
+          </p>
+        ) : (
+          <>
+            <p style={s.body}>
+              Your reports subdomain <code style={s.inline}>{current.reports_domain ?? 'reports.yourdomain.com'}</code> lacks
+              {!current.null_sender_spf && !current.null_sender_dmarc ? ' SPF and DMARC' : !current.null_sender_spf ? ' SPF' : ' DMARC'} records.
+              Without these, anyone can send email pretending to be from this subdomain.
+            </p>
+            {current.mx_found && (
+              <button
+                onClick={setup}
+                disabled={settingUp}
+                style={{ ...s.actionBtn, background: '#d97706', opacity: settingUp ? 0.6 : 1, marginTop: '0.4rem' }}
+              >
+                {settingUp ? 'Setting up…' : 'Add null-sender protection'}
+              </button>
+            )}
+            {setupError && <p style={s.error}>{setupError}</p>}
+            {setupInfo && <p style={{ ...s.body, color: '#059669', fontSize: '0.9rem', marginTop: '0.5rem' }}>{setupInfo}</p>}
           </>
         )}
       </div>
