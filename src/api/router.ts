@@ -961,7 +961,7 @@ async function _handleApi(
       const rd = reportsDomain();
       const DKIM_SELECTORS = getAllDkimSelectors();
 
-      const [spfLiveData, dmarcData, routingData, dkimData] = await Promise.all([
+      const [spfLiveData, dmarcData, routingData, dkimData, nullSenderData] = await Promise.all([
         // SPF: DoH lookup for {domain} TXT records → find v=spf1
         fetch(`https://cloudflare-dns.com/dns-query?name=${domain.domain}&type=TXT`, { headers: { Accept: 'application/dns-json' } })
           .then(r => r.json() as Promise<{ Answer?: { data: string }[] }>)
@@ -1034,16 +1034,21 @@ async function _handleApi(
         })(),
 
         // DKIM: CF API if available (full zone scan), else DoH for common selectors
+        // Scans both TXT and CNAME records — providers like Proton Mail use CNAMEs for DKIM
         (async () => {
           if (env.CLOUDFLARE_API_TOKEN && getZoneId()) {
             try {
-              const res = await fetch(
-                `https://api.cloudflare.com/client/v4/zones/${getZoneId()}/dns_records?type=TXT&per_page=100`,
-                { headers: { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` } }
-              );
-              const data = await res.json() as { result?: { name: string; content: string }[] };
-              if (data.result !== undefined) {
-                const found = data.result.filter(r => r.name.includes('_domainkey'));
+              const zoneId = getZoneId();
+              const headers = { Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}` };
+              const [txtRes, cnameRes] = await Promise.all([
+                fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records?type=TXT&per_page=100`, { headers }),
+                fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records?type=CNAME&per_page=100`, { headers }),
+              ]);
+              const txtData = await txtRes.json() as { result?: { name: string; content: string }[] };
+              const cnameData = await cnameRes.json() as { result?: { name: string; content: string }[] };
+              const allRecords = [...(txtData.result ?? []), ...(cnameData.result ?? [])];
+              const found = allRecords.filter(r => r.name.includes('_domainkey'));
+              if (found.length > 0 || txtData.result !== undefined) {
                 return { selectors: found.map(r => ({ name: r.name, record: r.content })), source: 'cf' as const };
               }
             } catch {}
@@ -1060,6 +1065,22 @@ async function _handleApi(
           }));
           return { selectors: hits.filter(Boolean) as { name: string; record: string }[], source: 'doh' as const };
         })(),
+
+        // Null-sender protection: check SPF + DMARC on reports subdomain
+        (async () => {
+          if (!rd) return { spf: false, dmarc: false };
+          const [spfRes, dmarcRes] = await Promise.all([
+            fetch(`https://cloudflare-dns.com/dns-query?name=${rd}&type=TXT`, { headers: { Accept: 'application/dns-json' } })
+              .then(r => r.json() as Promise<{ Answer?: { data: string }[] }>)
+              .then(d => !!(d.Answer ?? []).some(r => r.data?.replace(/^"|"$/g, '').startsWith('v=spf1')))
+              .catch(() => false),
+            fetch(`https://cloudflare-dns.com/dns-query?name=_dmarc.${rd}&type=TXT`, { headers: { Accept: 'application/dns-json' } })
+              .then(r => r.json() as Promise<{ Answer?: { data: string }[] }>)
+              .then(d => !!(d.Answer ?? []).some(r => r.data?.replace(/^"|"$/g, '').startsWith('v=DMARC1')))
+              .catch(() => false),
+          ]);
+          return { spf: spfRes, dmarc: dmarcRes };
+        })(),
       ]);
 
       const spfFlatConfig = await getSpfFlattenConfig(env.DB, domain.id);
@@ -1071,7 +1092,7 @@ async function _handleApi(
         dmarc: dmarcData,
         spf: { record: spfLiveData ?? domain.spf_record ?? null, lookup_count: domain.spf_lookup_count ?? null, flattening_active: !!(spfFlatConfig?.enabled) },
         dkim: dkimData,
-        routing: { ...routingData, reports_domain: rd ?? null },
+        routing: { ...routingData, reports_domain: rd ?? null, null_sender_spf: nullSenderData.spf, null_sender_dmarc: nullSenderData.dmarc },
       });
     }
 
