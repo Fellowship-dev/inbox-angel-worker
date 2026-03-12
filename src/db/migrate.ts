@@ -283,6 +283,34 @@ const MIGRATIONS: { version: number; sql: string }[] = [
       CREATE INDEX IF NOT EXISTS idx_audit_resource         ON audit_log(resource_type, resource_id);
     `,
 	},
+	{
+		// Email inbox log — tracks every inbound email for observability
+		version: 17,
+		sql: `
+      CREATE TABLE IF NOT EXISTS email_inbox (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        received_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        sender TEXT NOT NULL,
+        recipient TEXT NOT NULL,
+        subject TEXT,
+        message_type TEXT,
+        status TEXT NOT NULL DEFAULT 'received',
+        rejection_reason TEXT,
+        policy_domain TEXT,
+        domain_id INTEGER,
+        report_id INTEGER,
+        raw_size_bytes INTEGER,
+        created_at INTEGER NOT NULL DEFAULT (unixepoch())
+      );
+      CREATE INDEX IF NOT EXISTS idx_inbox_received ON email_inbox(received_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_inbox_status ON email_inbox(status);
+    `,
+	},
+	{
+		// Store decompressed XML on email_inbox — preserves report data even for rejected emails
+		version: 18,
+		sql: `ALTER TABLE email_inbox ADD COLUMN raw_xml TEXT;`,
+	},
 ];
 
 let migrated = false;
