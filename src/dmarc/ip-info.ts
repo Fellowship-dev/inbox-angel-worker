@@ -61,6 +61,49 @@ async function lookupAsn(ip: string): Promise<{ asn: string | null; countryCode:
   return { asn, countryCode, org };
 }
 
+// ── Friendly org names ────────────────────────────────────────
+
+const ORG_FRIENDLY: [substring: string, friendlyName: string][] = [
+  ['GOOGLE', 'Google'],
+  ['MICROSOFT', 'Microsoft'],
+  ['AMAZON', 'Amazon'],
+  ['CLOUDFLARE', 'Cloudflare'],
+  ['SENDGRID', 'SendGrid'],
+  ['MAILCHIMP', 'Mailchimp'],
+  ['MANDRILL', 'Mailchimp'],
+  ['POSTMARK', 'Postmark'],
+  ['HUBSPOT', 'HubSpot'],
+  ['PROTON', 'Proton Mail'],
+  ['ZOHO', 'Zoho'],
+  ['MAILGUN', 'Mailgun'],
+  ['BREVO', 'Brevo'],
+  ['SENDINBLUE', 'Brevo'],
+  ['MAILJET', 'Mailjet'],
+  ['RACKSPACE', 'Rackspace'],
+  ['OVHCLOUD', 'OVHcloud'],
+  ['OVH SAS', 'OVHcloud'],
+  ['HETZNER', 'Hetzner'],
+  ['DIGITALOCEAN', 'DigitalOcean'],
+  ['LINODE', 'Linode'],
+  ['FASTLY', 'Fastly'],
+  ['AKAMAI', 'Akamai'],
+  ['ORACLE', 'Oracle'],
+  ['MIMECAST', 'Mimecast'],
+  ['BARRACUDA', 'Barracuda'],
+  ['ZENDESK', 'Zendesk'],
+  ['RESEND', 'Resend'],
+];
+
+/** Map raw ASN org strings to human-readable names */
+export function friendlyOrg(raw: string | null): string | null {
+  if (!raw) return null;
+  const upper = raw.toUpperCase();
+  for (const [substring, friendly] of ORG_FRIENDLY) {
+    if (upper.includes(substring)) return friendly;
+  }
+  return raw;
+}
+
 function isIPv4(ip: string): boolean {
   return /^\d{1,3}(\.\d{1,3}){3}$/.test(ip);
 }
@@ -86,7 +129,7 @@ export async function getIpInfo(ip: string): Promise<IpInfo> {
     country_name: null, // not available without a geo DB — country_code is enough
     subdivision: null,
     city: null,
-    org: org ?? null,
+    org: friendlyOrg(org),
     asn: asn ?? null,
   };
 }

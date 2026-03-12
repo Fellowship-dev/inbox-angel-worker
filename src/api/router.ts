@@ -104,6 +104,7 @@ import { reportsDomain, fromEmail, enrichEnv, getZoneId, getAccountId, getBaseDo
 import { logAudit } from '../audit/log';
 import { flattenSpf, restoreSpf } from '../email/spf-flattener';
 import { lookupSpf, countSpfLookupsFromRecord } from '../email/dns-check';
+import { getAllDkimSelectors } from '../../dashboard/src/email-service-providers';
 import {
   provisionMtaSts,
   updateMtaStsTxtRecord,
@@ -958,7 +959,7 @@ async function _handleApi(
       if (!domain) return err('domain not found', 404);
 
       const rd = reportsDomain();
-      const DKIM_SELECTORS = ['google', 'selector1', 'selector2', 'mail', 'default', 'k1', 'dkim', 'mandrill', 'mailjet', 'sendgrid', 'smtp', 'pm', 'brevo', 'resend', 'mxroute', 'zoho'];
+      const DKIM_SELECTORS = getAllDkimSelectors();
 
       const [spfLiveData, dmarcData, routingData, dkimData] = await Promise.all([
         // SPF: DoH lookup for {domain} TXT records → find v=spf1
