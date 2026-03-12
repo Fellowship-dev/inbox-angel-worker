@@ -1,6 +1,6 @@
 import { handleEmail } from './email/handler';
 import { handleApi } from './api/router';
-import { getActiveSubscriptions, updateSubscriptionBaseline, getAllEnabledSpfFlattenConfigs, updateSpfFlattenResult, updateSpfFlattenError, getDomainById, getAllDomains, updateDomainSpfLookupCount, getAllEnabledMtaStsConfigs, getMtaStsConfigByDomain, updateMtaStsMxHosts, updateMtaStsError, getHeartbeatStats } from './db/queries';
+import { getActiveSubscriptions, updateSubscriptionBaseline, getAllEnabledSpfFlattenConfigs, updateSpfFlattenResult, updateSpfFlattenError, getDomainById, getAllDomains, updateDomainSpfLookupCount, getAllEnabledMtaStsConfigs, getMtaStsConfigByDomain, updateMtaStsMxHosts, updateMtaStsError, getHeartbeatStats, cleanupOldInboxEntries } from './db/queries';
 import { checkSubscription } from './monitor/check';
 import { sendChangeNotification } from './monitor/notify';
 import { sendWeeklyDigests } from './digest/weekly';
@@ -119,6 +119,9 @@ export default {
     }
 
     // Daily monitor check — every day 8am UTC (default / catch-all)
+    // Cleanup old email_inbox entries (>7 days)
+    cleanupOldInboxEntries(env.DB, 7).catch(e => console.warn('[cron] inbox cleanup failed:', e));
+
     // Also refresh SPF lookup counts for all domains
     const { results: allDomains } = await getAllDomains(env.DB);
     for (const d of allDomains) {

@@ -701,6 +701,64 @@ export function insertReportRecords(db: D1Database, records: Omit<ReportRecord, 
   ));
 }
 
+// ── Email Inbox Log ───────────────────────────────────────────
+
+export function insertEmailInbox(db: D1Database, r: {
+  sender: string;
+  recipient: string;
+  subject: string | null;
+  message_type: string | null;
+  status: string;
+  rejection_reason?: string | null;
+  policy_domain?: string | null;
+  domain_id?: number | null;
+  report_id?: number | null;
+  raw_size_bytes?: number | null;
+}) {
+  return db.prepare(`
+    INSERT INTO email_inbox
+      (sender, recipient, subject, message_type, status,
+       rejection_reason, policy_domain, domain_id, report_id, raw_size_bytes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).bind(
+    r.sender, r.recipient, r.subject, r.message_type, r.status,
+    r.rejection_reason ?? null, r.policy_domain ?? null,
+    r.domain_id ?? null, r.report_id ?? null, r.raw_size_bytes ?? null,
+  ).run();
+}
+
+export function updateEmailInboxStatus(db: D1Database, id: number, status: string, extra?: {
+  rejection_reason?: string;
+  policy_domain?: string;
+  domain_id?: number;
+  report_id?: number;
+  raw_xml?: string;
+  raw_size_bytes?: number;
+}) {
+  const sets = ['status = ?'];
+  const vals: unknown[] = [status];
+  if (extra?.rejection_reason !== undefined) { sets.push('rejection_reason = ?'); vals.push(extra.rejection_reason); }
+  if (extra?.policy_domain !== undefined) { sets.push('policy_domain = ?'); vals.push(extra.policy_domain); }
+  if (extra?.domain_id !== undefined) { sets.push('domain_id = ?'); vals.push(extra.domain_id); }
+  if (extra?.report_id !== undefined) { sets.push('report_id = ?'); vals.push(extra.report_id); }
+  if (extra?.raw_xml !== undefined) { sets.push('raw_xml = ?'); vals.push(extra.raw_xml); }
+  if (extra?.raw_size_bytes !== undefined) { sets.push('raw_size_bytes = ?'); vals.push(extra.raw_size_bytes); }
+  vals.push(id);
+  return db.prepare(`UPDATE email_inbox SET ${sets.join(', ')} WHERE id = ?`).bind(...vals).run();
+}
+
+export function getRecentInboxEntries(db: D1Database, limit = 50, status?: string) {
+  if (status) {
+    return db.prepare(`SELECT * FROM email_inbox WHERE status = ? ORDER BY received_at DESC LIMIT ?`).bind(status, limit).all();
+  }
+  return db.prepare(`SELECT * FROM email_inbox ORDER BY received_at DESC LIMIT ?`).bind(limit).all();
+}
+
+export function cleanupOldInboxEntries(db: D1Database, olderThanDays = 7) {
+  const cutoff = Math.floor(Date.now() / 1000) - olderThanDays * 86400;
+  return db.prepare(`DELETE FROM email_inbox WHERE received_at < ?`).bind(cutoff).run();
+}
+
 // ── Telemetry heartbeat ───────────────────────────────────────
 
 export interface HeartbeatStats {

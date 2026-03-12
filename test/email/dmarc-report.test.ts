@@ -30,11 +30,19 @@ vi.mock('../../src/dmarc/store-report', () => ({
   storeReport: vi.fn(),
 }));
 
+vi.mock('../../src/dmarc/extract-report', () => ({
+  extractReport: vi.fn(),
+  ParserError: class ParserError extends Error {
+    constructor(msg: string) { super(msg); this.name = 'ParserError'; }
+  },
+}));
+
 import { handleDmarcReport } from '../../src/email/dmarc-report';
 import * as mimeExtract from '../../src/email/mime-extract';
 import * as resolveDomainMod from '../../src/email/resolve-domain';
 import * as parseEmailMod from '../../src/dmarc/parse-email';
 import * as storeReportMod from '../../src/dmarc/store-report';
+import * as extractReportMod from '../../src/dmarc/extract-report';
 
 // ── Fixtures ──────────────────────────────────────────────────
 
@@ -107,6 +115,7 @@ beforeEach(() => {
   vi.mocked(resolveDomainMod.resolveDomain).mockResolvedValue(DOMAIN);
   vi.mocked(parseEmailMod.parseDmarcEmail).mockResolvedValue(REPORT);
   vi.mocked(storeReportMod.storeReport).mockResolvedValue({ stored: true, reportId: 42 });
+  vi.mocked(extractReportMod.extractReport).mockReturnValue('<xml>decompressed</xml>');
 });
 
 afterEach(() => vi.clearAllMocks());
@@ -157,7 +166,7 @@ describe('handleDmarcReport — happy path', () => {
     expect(message.setReject).not.toHaveBeenCalled();
   });
 
-  it('stores rawXml=null for binary (gz) attachments', async () => {
+  it('stores rawXml from extractReport for binary (gz) attachments', async () => {
     vi.mocked(mimeExtract.extractAttachmentBytes).mockResolvedValue(
       new Uint8Array([0x1f, 0x8b, 0x08])
     );
@@ -165,10 +174,10 @@ describe('handleDmarcReport — happy path', () => {
     await handleDmarcReport(makeMessage(), env);
 
     const [, , , rawXml] = vi.mocked(storeReportMod.storeReport).mock.calls[0];
-    expect(rawXml).toBeNull();
+    expect(rawXml).toBe('<xml>decompressed</xml>');
   });
 
-  it('stores rawXml string for plain XML attachments', async () => {
+  it('stores rawXml from extractReport for plain XML attachments', async () => {
     const xml = '<?xml version="1.0"?><feedback></feedback>';
     vi.mocked(mimeExtract.extractAttachmentBytes).mockResolvedValue(
       new TextEncoder().encode(xml)
@@ -177,7 +186,7 @@ describe('handleDmarcReport — happy path', () => {
     await handleDmarcReport(makeMessage(), env);
 
     const [, , , rawXml] = vi.mocked(storeReportMod.storeReport).mock.calls[0];
-    expect(rawXml).toBe(xml);
+    expect(rawXml).toBe('<xml>decompressed</xml>');
   });
 
   it('does not throw when storeReport returns stored=false (duplicate)', async () => {
@@ -271,5 +280,95 @@ describe('handleDmarcReport — error paths', () => {
     vi.mocked(storeReportMod.storeReport).mockRejectedValue(new Error('D1 unavailable'));
     const result = await handleDmarcReport(makeMessage(), makeEnv());
     expect(result).toHaveProperty('failure_count');
+  });
+});
+
+// ── DmarcReportResult fields — happy path ─────────────────────
+
+describe('handleDmarcReport — result fields (happy path)', () => {
+  it('returns status=processed on success', async () => {
+    const result = await handleDmarcReport(makeMessage(), makeEnv());
+    expect(result.status).toBe('processed');
+  });
+
+  it('returns policy_domain from parsed report', async () => {
+    const result = await handleDmarcReport(makeMessage(), makeEnv());
+    expect(result.policy_domain).toBe('acme.com');
+  });
+
+  it('returns domain_id and report_id on success', async () => {
+    const result = await handleDmarcReport(makeMessage(), makeEnv());
+    expect(result.domain_id).toBe(1);
+    expect(result.report_id).toBe(42);
+  });
+
+  it('returns raw_size_bytes from extracted bytes', async () => {
+    const bytes = new Uint8Array([0x1f, 0x8b]);
+    vi.mocked(mimeExtract.extractAttachmentBytes).mockResolvedValue(bytes);
+    const result = await handleDmarcReport(makeMessage(), makeEnv());
+    expect(result.raw_size_bytes).toBe(bytes.length);
+  });
+
+  it('returns raw_xml from extractReport', async () => {
+    const result = await handleDmarcReport(makeMessage(), makeEnv());
+    expect(result.raw_xml).toBe('<xml>decompressed</xml>');
+  });
+});
+
+// ── DmarcReportResult fields — error paths ────────────────────
+
+describe('handleDmarcReport — result fields (error paths)', () => {
+  it('returns status=rejected on MIME extraction failure', async () => {
+    vi.mocked(mimeExtract.extractAttachmentBytes).mockRejectedValue(
+      new mimeExtract.MimeExtractError('No DMARC attachment found')
+    );
+    const result = await handleDmarcReport(makeMessage(), makeEnv());
+    expect(result.status).toBe('rejected');
+    expect(result.rejection_reason).toContain('Could not extract attachment');
+  });
+
+  it('returns status=rejected on unknown domain', async () => {
+    vi.mocked(resolveDomainMod.resolveDomain).mockResolvedValue(null);
+    const result = await handleDmarcReport(makeMessage(), makeEnv());
+    expect(result.status).toBe('rejected');
+    expect(result.policy_domain).toBe('acme.com');
+  });
+
+  it('returns status=rejected on parse failure', async () => {
+    vi.mocked(parseEmailMod.parseDmarcEmail).mockRejectedValue(
+      new parseEmailMod.ParseEmailError('Invalid DMARC report XML')
+    );
+    const result = await handleDmarcReport(makeMessage(), makeEnv());
+    expect(result.status).toBe('rejected');
+    expect(result.rejection_reason).toContain('Invalid DMARC report');
+  });
+
+  it('returns status=failed on storage failure', async () => {
+    vi.mocked(storeReportMod.storeReport).mockRejectedValue(new Error('D1 unavailable'));
+    const result = await handleDmarcReport(makeMessage(), makeEnv());
+    expect(result.status).toBe('failed');
+    expect(result.rejection_reason).toBe('D1 unavailable');
+  });
+
+  it('returns raw_xml even on rejected emails (unknown domain)', async () => {
+    vi.mocked(resolveDomainMod.resolveDomain).mockResolvedValue(null);
+    const result = await handleDmarcReport(makeMessage(), makeEnv());
+    expect(result.raw_xml).toBe('<xml>decompressed</xml>');
+  });
+
+  it('returns raw_xml even on parse failure (best effort)', async () => {
+    vi.mocked(parseEmailMod.parseDmarcEmail).mockRejectedValue(
+      new parseEmailMod.ParseEmailError('bad xml')
+    );
+    const result = await handleDmarcReport(makeMessage(), makeEnv());
+    expect(result.raw_xml).toBe('<xml>decompressed</xml>');
+  });
+
+  it('returns no raw_xml on MIME extraction failure', async () => {
+    vi.mocked(mimeExtract.extractAttachmentBytes).mockRejectedValue(
+      new mimeExtract.MimeExtractError('No attachment')
+    );
+    const result = await handleDmarcReport(makeMessage(), makeEnv());
+    expect(result.raw_xml).toBeUndefined();
   });
 });
