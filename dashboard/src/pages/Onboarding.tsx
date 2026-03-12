@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'preact/hooks';
-import { getDomains, getOnboardingStatus, applyDmarc, applySpf, getWizardState, updateWizardState, setupEmailRouting, setBaseDomain, registerDestination } from '../api';
-import { SPF_PROVIDERS, detectProviders, extractIncludes, extractOtherMechanisms, buildSpfRecord } from '../spf-providers';
+import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
+import { getDomains, getOnboardingStatus, applyDmarc, applySpf, getSpfLookupCount, getWizardState, updateWizardState, setupEmailRouting, setBaseDomain, registerDestination } from '../api';
+import { SPF_PROVIDERS, detectProviders, extractIncludes, extractOtherMechanisms, buildSpfRecord, matchDkimProvider, findUnsignedSpfProviders } from '../email-service-providers';
+import type { EmailProvider } from '../email-service-providers';
 import type { OnboardingStatus, WizardState, WizardStepState } from '../types';
 
 type Severity = 'good' | 'info' | 'warning' | 'error';
@@ -42,9 +43,13 @@ function spfSeverity(s: OnboardingStatus['spf']): Severity {
   return 'good';
 }
 
-function dkimSeverity(d: OnboardingStatus['dkim'], dmarcPolicy: string | null): Severity {
-  if (d.selectors.length > 0) return 'good';
-  if (dmarcPolicy === 'quarantine' || dmarcPolicy === 'reject') return 'warning';
+function dkimSeverity(d: OnboardingStatus['dkim'], dmarcPolicy: string | null, unsignedCount = 0): Severity {
+  const hasDkim = d.selectors.length > 0;
+  const strict = dmarcPolicy === 'quarantine' || dmarcPolicy === 'reject';
+  if (hasDkim && unsignedCount === 0) return 'good';
+  if (hasDkim && unsignedCount > 0 && strict) return 'warning';
+  if (hasDkim && unsignedCount > 0) return 'info';
+  if (!hasDkim && strict) return 'warning';
   return 'info';
 }
 
@@ -339,7 +344,26 @@ function SpfStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext:
   const previewRecord = (selectedIncludes.length > 0 || otherMechanisms.length > 0)
     ? buildSpfRecord(selectedIncludes, qualifier, otherMechanisms)
     : null;
-  const estimatedLookups = selectedIncludes.length + otherMechanisms.filter(m => ['mx', 'a', 'ptr'].includes(m) || m.startsWith('redirect=')).length;
+
+  // Real lookup count via backend (walks nested includes via DNS)
+  const [realLookupCount, setRealLookupCount] = useState<number | null>(null);
+  const [lookupLoading, setLookupLoading] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (!previewRecord) { setRealLookupCount(null); return; }
+    setLookupLoading(true);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      getSpfLookupCount(previewRecord)
+        .then(r => setRealLookupCount(r.lookup_count))
+        .catch(() => setRealLookupCount(null))
+        .finally(() => setLookupLoading(false));
+    }, 400);
+    return () => { if (debounceRef.current) clearTimeout(debounceRef.current); };
+  }, [previewRecord]);
+
+  const estimatedLookups = realLookupCount ?? selectedIncludes.length;
 
   const hasChanges = previewRecord !== spf.record;
   const flatteningActive = spf.flattening_active;
@@ -490,8 +514,8 @@ function SpfStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext:
                     <div style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px', padding: '0.5rem', fontFamily: 'monospace', fontSize: '0.75rem', wordBreak: 'break-all' as const, color: '#166534' }}>
                       {previewRecord}
                     </div>
-                    <p style={{ fontSize: '0.72rem', color: estimatedLookups > 9 ? '#dc2626' : estimatedLookups >= 8 ? '#d97706' : '#059669', marginTop: '0.3rem' }}>
-                      ~{estimatedLookups} / 10 lookups
+                    <p style={{ fontSize: '0.72rem', color: lookupLoading ? '#9ca3af' : estimatedLookups > 9 ? '#dc2626' : estimatedLookups >= 8 ? '#d97706' : '#059669', marginTop: '0.3rem' }}>
+                      {lookupLoading ? 'counting lookups…' : `${realLookupCount !== null ? '' : '~'}${estimatedLookups} / 10 lookups`}
                     </p>
                   </div>
                 </div>
@@ -499,8 +523,8 @@ function SpfStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext:
                 <div>
                   <p style={s.label}>
                     {spf.record && !hasChanges ? 'Current record' : 'Preview'}
-                    <span style={{ fontWeight: 400, textTransform: 'none' as const, marginLeft: '0.5rem', color: estimatedLookups > 9 ? '#dc2626' : estimatedLookups >= 8 ? '#d97706' : '#6b7280' }}>
-                      ~{estimatedLookups} / 10 lookups
+                    <span style={{ fontWeight: 400, textTransform: 'none' as const, marginLeft: '0.5rem', color: lookupLoading ? '#9ca3af' : estimatedLookups > 9 ? '#dc2626' : estimatedLookups >= 8 ? '#d97706' : '#6b7280' }}>
+                      {lookupLoading ? 'counting…' : `${realLookupCount !== null ? '' : '~'}${estimatedLookups} / 10 lookups`}
                     </span>
                   </p>
                   <CodeBlock value={previewRecord} onCopy={() => copy(previewRecord)} copied={copied} />
@@ -549,12 +573,23 @@ function SpfStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext:
 function DkimStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext: () => void; onSkip: () => void }) {
   const { dkim } = status;
   const dmarcPolicy = status.dmarc.current_record?.match(/p=([a-z]+)/)?.[1] ?? null;
-  const sev = dkimSeverity(dkim, dmarcPolicy);
+  const spfRecord = status.spf.record;
   const [rescanning, setRescanning] = useState(false);
   const [rescanStatus, setRescanStatus] = useState<OnboardingStatus | null>(null);
 
   const currentDkim = rescanStatus?.dkim ?? dkim;
-  const currentSev = rescanStatus ? dkimSeverity(rescanStatus.dkim, dmarcPolicy) : sev;
+  const currentSpf = rescanStatus?.spf.record ?? spfRecord;
+
+  // Classify selectors
+  const signed: { sel: typeof currentDkim.selectors[0]; provider: EmailProvider }[] = [];
+  const unknown: typeof currentDkim.selectors = [];
+  for (const sel of currentDkim.selectors) {
+    const provider = matchDkimProvider(sel.name);
+    if (provider) signed.push({ sel, provider });
+    else unknown.push(sel);
+  }
+  const unsigned = findUnsignedSpfProviders(currentDkim.selectors, currentSpf);
+  const currentSev = dkimSeverity(currentDkim, dmarcPolicy, unsigned.length);
 
   const rescan = async () => {
     setRescanning(true);
@@ -573,21 +608,70 @@ function DkimStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext
         <h2 style={s.stepTitle}>DKIM signing</h2>
       </div>
 
-      {currentDkim.selectors.length > 0 ? (
+      {/* Signed senders */}
+      {signed.length > 0 && (
         <>
           <p style={s.body}>
-            Found {currentDkim.selectors.length} DKIM selector{currentDkim.selectors.length > 1 ? 's' : ''}.
-            Your email provider has configured signing — outgoing mail carries a cryptographic signature.
+            {signed.length} signed sender{signed.length > 1 ? 's' : ''} detected:
           </p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.5rem' }}>
-            {currentDkim.selectors.map(sel => (
-              <div key={sel.name} style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px', padding: '0.4rem 0.75rem' }}>
-                <code style={{ fontSize: '0.78rem', color: '#15803d', fontFamily: 'monospace' }}>{sel.name}</code>
+            {signed.map(({ sel, provider }) => (
+              <div key={sel.name} style={{ background: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '6px', padding: '0.5rem 0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.25rem' }}>
+                <span>
+                  <strong style={{ fontSize: '0.85rem', color: '#15803d' }}>{provider.name}</strong>
+                  <code style={{ fontSize: '0.72rem', color: '#6b7280', fontFamily: 'monospace', marginLeft: '0.5rem' }}>{sel.name}</code>
+                </span>
+                {provider.dkimGuideUrl && (
+                  <a href={provider.dkimGuideUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.75rem', color: '#2563eb' }}>
+                    Setup guide
+                  </a>
+                )}
               </div>
             ))}
           </div>
         </>
-      ) : (
+      )}
+
+      {/* Possibly unsigned — SPF providers with no matching DKIM */}
+      {unsigned.length > 0 && (
+        <>
+          <p style={{ ...s.body, marginTop: signed.length > 0 ? '0.75rem' : 0 }}>
+            {unsigned.length} provider{unsigned.length > 1 ? 's' : ''} in your SPF record {unsigned.length > 1 ? 'appear' : 'appears'} to be missing DKIM:
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.5rem' }}>
+            {unsigned.map(provider => (
+              <div key={provider.include || provider.name} style={{ background: '#fffbeb', border: '1px solid #fde68a', borderRadius: '6px', padding: '0.5rem 0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.25rem' }}>
+                <strong style={{ fontSize: '0.85rem', color: '#92400e' }}>{provider.name}</strong>
+                {provider.dkimGuideUrl && (
+                  <a href={provider.dkimGuideUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: '0.75rem', color: '#d97706' }}>
+                    Set up DKIM →
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Unknown selectors */}
+      {unknown.length > 0 && (
+        <>
+          <p style={{ ...s.body, marginTop: (signed.length > 0 || unsigned.length > 0) ? '0.75rem' : 0 }}>
+            {unknown.length} unrecognised selector{unknown.length > 1 ? 's' : ''}:
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', marginTop: '0.5rem' }}>
+            {unknown.map(sel => (
+              <div key={sel.name} style={{ background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: '6px', padding: '0.4rem 0.75rem' }}>
+                <code style={{ fontSize: '0.78rem', color: '#6b7280', fontFamily: 'monospace' }}>{sel.name}</code>
+                <span style={{ fontSize: '0.72rem', color: '#9ca3af', marginLeft: '0.5rem' }}>{sel.record.length > 60 ? sel.record.slice(0, 60) + '…' : sel.record}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* No DKIM at all */}
+      {currentDkim.selectors.length === 0 && unsigned.length === 0 && (
         <>
           <p style={s.body}>
             No DKIM selectors found{currentDkim.source === 'doh' ? ' (checked common selectors)' : ''}.
@@ -619,7 +703,7 @@ function DkimStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext
         </button>
       </div>
 
-      <StepNav onNext={onNext} onSkip={onSkip} showSkip={currentDkim.selectors.length === 0} />
+      <StepNav onNext={onNext} onSkip={onSkip} showSkip={currentSev !== 'good'} />
     </div>
   );
 }

@@ -290,3 +290,81 @@ describe('POST /api/domains/:id/apply-spf', () => {
     expect(url).toContain('txt-2');
   });
 });
+
+// ── POST /api/spf-lookup-count ──────────────────────────────
+
+describe('POST /api/spf-lookup-count', () => {
+  it('counts lookups for a simple record with only ip4 mechanisms', async () => {
+    // No fetch calls needed — ip4 doesn't trigger DNS lookups
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ Answer: [] }), { status: 200 }),
+    ));
+    const env = makeEnv();
+    const res = await handleApi(
+      req('POST', '/api/spf-lookup-count', { record: 'v=spf1 ip4:1.2.3.4 ~all' }),
+      env, ctx,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    expect(body.lookup_count).toBe(0);
+  });
+
+  it('counts includes and mx mechanisms', async () => {
+    // Mock DoH responses for include resolution
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ Answer: [{ type: 16, data: '"v=spf1 ip4:1.2.3.4 ~all"' }] }), { status: 200 }),
+    ));
+    const env = makeEnv();
+    const res = await handleApi(
+      req('POST', '/api/spf-lookup-count', { record: 'v=spf1 include:provider.com mx ~all' }),
+      env, ctx,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    // 1 include + 1 mx = 2
+    expect(body.lookup_count).toBe(2);
+  });
+
+  it('counts nested includes recursively', async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      // Level 1: provider.com has a nested include
+      if (url.includes('name=provider.com')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          Answer: [{ type: 16, data: '"v=spf1 include:nested.com ip4:1.2.3.4 ~all"' }],
+        })));
+      }
+      // Level 2: nested.com is a leaf
+      if (url.includes('name=nested.com')) {
+        return Promise.resolve(new Response(JSON.stringify({
+          Answer: [{ type: 16, data: '"v=spf1 ip4:5.6.7.8 ~all"' }],
+        })));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ Answer: [] })));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const env = makeEnv();
+    const res = await handleApi(
+      req('POST', '/api/spf-lookup-count', { record: 'v=spf1 include:provider.com ~all' }),
+      env, ctx,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as any;
+    // 1 (include:provider.com) + 1 (include:nested.com inside provider) = 2
+    expect(body.lookup_count).toBe(2);
+  });
+
+  it('rejects missing record', async () => {
+    const env = makeEnv();
+    const res = await handleApi(req('POST', '/api/spf-lookup-count', {}), env, ctx);
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects invalid SPF record', async () => {
+    const env = makeEnv();
+    const res = await handleApi(
+      req('POST', '/api/spf-lookup-count', { record: 'not-spf' }),
+      env, ctx,
+    );
+    expect(res.status).toBe(400);
+  });
+});
