@@ -744,17 +744,23 @@ async function _handleApi(
     return err('not found', 404);
   }
 
-  // Resolve session: env API_KEY override → users table session → legacy auto-key
+  // Resolve session: env API_KEY match → users table session → legacy auto-key
   const requestKey = request.headers.get('x-api-key') ?? '';
-  let effectiveApiKey: string | undefined = env.API_KEY;
+  let effectiveApiKey: string | undefined;
   let userBySession: Awaited<ReturnType<typeof getUserBySession>> = null;
-  if (!effectiveApiKey) {
+  if (env.API_KEY && requestKey === env.API_KEY) {
+    // Direct API_KEY match (curl/automation)
+    effectiveApiKey = env.API_KEY;
+  } else if (requestKey) {
+    // Try session-based auth (dashboard login) — only when a key is actually provided
     userBySession = await getUserBySession(env.DB!, requestKey);
     if (userBySession) {
       effectiveApiKey = requestKey;
-    } else {
-      effectiveApiKey = (await getSetting(env.DB!, 'auto_api_key'))?.value;
     }
+  }
+  // Fall back to auto-generated key when no API_KEY env and no session matched
+  if (!effectiveApiKey && !env.API_KEY) {
+    effectiveApiKey = (await getSetting(env.DB!, 'auto_api_key'))?.value;
   }
 
   try {
@@ -954,7 +960,20 @@ async function _handleApi(
       const rd = reportsDomain();
       const DKIM_SELECTORS = ['google', 'selector1', 'selector2', 'mail', 'default', 'k1', 'dkim', 'mandrill', 'mailjet', 'sendgrid', 'smtp', 'pm', 'brevo', 'resend', 'mxroute', 'zoho'];
 
-      const [dmarcData, routingData, dkimData] = await Promise.all([
+      const [spfLiveData, dmarcData, routingData, dkimData] = await Promise.all([
+        // SPF: DoH lookup for {domain} TXT records → find v=spf1
+        fetch(`https://cloudflare-dns.com/dns-query?name=${domain.domain}&type=TXT`, { headers: { Accept: 'application/dns-json' } })
+          .then(r => r.json() as Promise<{ Answer?: { data: string }[] }>)
+          .then(d => {
+            const records = d.Answer ?? [];
+            for (const r of records) {
+              const clean = r.data?.replace(/^"|"$/g, '') ?? '';
+              if (clean.startsWith('v=spf1')) return clean;
+            }
+            return null;
+          })
+          .catch(() => null),
+
         // DMARC: DoH lookup for _dmarc.{domain}
         fetch(`https://cloudflare-dns.com/dns-query?name=_dmarc.${domain.domain}&type=TXT`, { headers: { Accept: 'application/dns-json' } })
           .then(r => r.json() as Promise<{ Answer?: { data: string }[] }>)
@@ -1042,13 +1061,14 @@ async function _handleApi(
         })(),
       ]);
 
+      const spfFlatConfig = await getSpfFlattenConfig(env.DB, domain.id);
       return json({
         domain_id: domain.id,
         domain: domain.domain,
         rua_address: domain.rua_address,
         cf_available: !!(env.CLOUDFLARE_API_TOKEN && getZoneId()),
         dmarc: dmarcData,
-        spf: { record: domain.spf_record ?? null, lookup_count: domain.spf_lookup_count ?? null },
+        spf: { record: spfLiveData ?? domain.spf_record ?? null, lookup_count: domain.spf_lookup_count ?? null, flattening_active: !!(spfFlatConfig?.enabled) },
         dkim: dkimData,
         routing: { ...routingData, reports_domain: rd ?? null },
       });
@@ -1130,6 +1150,67 @@ async function _handleApi(
           actor_id: userBySession?.id ?? null, actor_email: userBySession?.email ?? null, actor_type: 'user',
         action: existingId ? 'dns.update' : 'dns.create',
         resource_type: 'dns_record', resource_id: cfData.result?.id ?? '', resource_name: recordName,
+        after_value: { type: 'TXT', name: recordName, content: body.record },
+      }, ctx);
+
+      return json({ ok: true, record: body.record, created: !existingId });
+    }
+
+    // POST /api/domains/:id/apply-spf — create or update SPF TXT record in CF DNS
+    const applySpfMatch = path.match(/^\/api\/domains\/([^/]+)\/apply-spf$/);
+    if (applySpfMatch && method === 'POST') {
+      const id = parseInt(applySpfMatch[1], 10);
+      if (isNaN(id)) return err('invalid domain id', 400);
+      const domain = await getDomainById(env.DB, id);
+      if (!domain) return err('domain not found', 404);
+      if (!env.CLOUDFLARE_API_TOKEN || !getZoneId()) return err('Cloudflare credentials not configured', 400);
+
+      // Block if SPF flattening is active — wizard edits would be overwritten by next cron run
+      const flatConfig = await getSpfFlattenConfig(env.DB, id);
+      if (flatConfig?.enabled) return err('SPF flattening is active for this domain. Disable it before editing the SPF record manually.', 409);
+
+      const body = await parseBody<{ record?: string; confirm_overwrite?: boolean }>(request);
+      if (!body.record) return err('record content is required', 400);
+      if (!body.record.startsWith('v=spf1')) return err('SPF record must start with v=spf1', 400);
+      if (!body.record.includes('all')) return err('SPF record must end with an all mechanism', 400);
+
+      const zoneId = getZoneId()!;
+      const token = env.CLOUDFLARE_API_TOKEN;
+      const recordName = domain.domain;
+
+      // Find existing SPF TXT record
+      const searchData = await fetch(
+        `https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records?type=TXT&name=${encodeURIComponent(recordName)}&per_page=100`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      ).then(r => r.json() as Promise<{ result?: { id: string; content: string }[] }>);
+      const existingSpf = searchData.result?.find(r => r.content.replace(/^"|"$/g, '').startsWith('v=spf1'));
+      const existingId = existingSpf?.id;
+
+      // Safety: require explicit confirmation when overwriting an existing record
+      if (existingSpf && !body.confirm_overwrite) {
+        return json({ ok: false, needs_confirmation: true, existing_record: existingSpf.content.replace(/^"|"$/g, ''), proposed_record: body.record }, 200);
+      }
+
+      const cfRes = existingId
+        ? await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records/${existingId}`, {
+            method: 'PATCH',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: body.record }),
+          })
+        : await fetch(`https://api.cloudflare.com/client/v4/zones/${zoneId}/dns_records`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ type: 'TXT', name: recordName, content: body.record, ttl: 3600 }),
+          });
+
+      const cfData = await cfRes.json() as { success: boolean; result?: { id: string }; errors?: { message: string }[] };
+      if (!cfData.success) return err(cfData.errors?.map(e => e.message).join(', ') ?? 'CF DNS update failed', 500);
+
+      logAudit(env.DB!, {
+          actor_id: userBySession?.id ?? null, actor_email: userBySession?.email ?? null, actor_type: 'user',
+        action: existingId ? 'dns.update' : 'dns.create',
+        resource_type: 'dns_record', resource_id: cfData.result?.id ?? '', resource_name: recordName,
+        before_value: existingSpf ? { type: 'TXT', name: recordName, content: existingSpf.content } : null,
         after_value: { type: 'TXT', name: recordName, content: body.record },
       }, ctx);
 

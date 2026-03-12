@@ -1,6 +1,17 @@
 // Integration-style tests for handleFreeCheck.
 // All I/O (fetch, D1, message.reply) is mocked — no network required.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Mock env-utils — module-level caches are empty in test
+vi.mock('../../src/env-utils', async (importOriginal) => {
+  const actual = await importOriginal() as Record<string, unknown>;
+  return {
+    ...actual,
+    fromEmail: vi.fn().mockReturnValue('check@reports.inboxangel.io'),
+    reportsDomain: vi.fn().mockReturnValue('reports.inboxangel.io'),
+  };
+});
+
 import { handleFreeCheck } from '../../src/email/free-check';
 import type { Env } from '../../src/index';
 

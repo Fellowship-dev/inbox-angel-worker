@@ -1,4 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// Mock env-utils — module-level caches are empty in test
+vi.mock('../../src/env-utils', async (importOriginal) => {
+  const actual = await importOriginal() as Record<string, unknown>;
+  return {
+    ...actual,
+    reportsDomain: vi.fn().mockReturnValue('reports.inboxangel.io'),
+    fromEmail: vi.fn().mockReturnValue('check@reports.inboxangel.io'),
+  };
+});
+
 import { sendChangeNotification } from '../../src/monitor/notify';
 import type { DomainChange } from '../../src/monitor/check';
 
