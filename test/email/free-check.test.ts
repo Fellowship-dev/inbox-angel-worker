@@ -28,8 +28,6 @@ function makeEnv(overrides: Partial<Env> = {}): Env {
 
   return {
     DB: db,
-    AUTH0_DOMAIN: '',
-    AUTH0_AUDIENCE: '',
     CLOUDFLARE_ACCOUNT_ID: '',
     CLOUDFLARE_ZONE_ID: '',
     CLOUDFLARE_API_TOKEN: '',

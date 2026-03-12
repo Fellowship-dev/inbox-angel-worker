@@ -15,11 +15,7 @@ import { discoverMxHosts, generatePolicyId, buildPolicyFile, updateMtaStsTxtReco
 export interface Env {
   DB: D1Database | undefined;
   ASSETS: Fetcher;
-  // Auth (legacy JWT — leave empty to use email/password dashboard auth)
-  AUTH0_DOMAIN?: string;
-  AUTH0_AUDIENCE?: string;
-  AUTH0_ORG_CLAIM?: string;
-  API_KEY?: string;             // legacy bypass key — superseded by email/password auth
+  API_KEY?: string;              // static API key (optional — dashboard uses session auth)
   // Cloudflare (secrets — set via wrangler secret put)
   CLOUDFLARE_API_TOKEN?: string; // EMAIL token: email routing + DNS writes
   // Worker config (vars in wrangler.jsonc)

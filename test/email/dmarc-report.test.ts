@@ -95,8 +95,6 @@ function makeMessage(overrides: Partial<{
 function makeEnv(): Env {
   return {
     DB: {} as D1Database,
-    AUTH0_DOMAIN: '',
-    AUTH0_AUDIENCE: '',
     FROM_EMAIL: 'check@reports.inboxangel.io',
     REPORTS_DOMAIN: 'reports.inboxangel.io',
   };

@@ -57,8 +57,6 @@ function makeEnv(dbOverrides: Partial<{ prepare: any; batch: any }> = {}): Env {
       batch: vi.fn().mockResolvedValue([]),
       ...dbOverrides,
     } as unknown as D1Database,
-    AUTH0_DOMAIN: '',
-    AUTH0_AUDIENCE: '',
     API_KEY: 'test-key',
     CLOUDFLARE_ACCOUNT_ID: '',
     CLOUDFLARE_ZONE_ID: '',

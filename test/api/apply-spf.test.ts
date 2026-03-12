@@ -79,8 +79,6 @@ function makeEnv(overrides: { cfToken?: string; flattenEnabled?: boolean } = {})
 
   return {
     DB: { prepare: prepareMock, batch: vi.fn().mockResolvedValue([]) } as unknown as D1Database,
-    AUTH0_DOMAIN: '',
-    AUTH0_AUDIENCE: '',
     API_KEY: 'test-key',
     CLOUDFLARE_ACCOUNT_ID: 'acct-test',
     CLOUDFLARE_ZONE_ID: 'zone-test-123',
