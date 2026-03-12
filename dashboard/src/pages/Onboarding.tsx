@@ -596,6 +596,7 @@ function DkimStep({ status, onNext, onSkip }: { status: OnboardingStatus; onNext
     }
   }
   const signedProviders = [...signedByProvider.values()];
+  for (const sp of signedProviders) sp.selectors.sort();
   const unsigned = findUnsignedSpfProviders(currentDkim.selectors, currentSpf);
   const currentSev = dkimSeverity(currentDkim, dmarcPolicy, unsigned.length);
 
