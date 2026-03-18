@@ -16,6 +16,14 @@ export function formatDateWithRelative(value: number | string): string {
   return `${formatDate(value)} · ${relativeTime(value)}`;
 }
 
+/** Format a unix timestamp (seconds) as "Mar 18, 2026, 13:57" */
+export function formatTimestamp(ts: number): string {
+  return new Date(ts * 1000).toLocaleString('en-US', {
+    year: 'numeric', month: 'short', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  });
+}
+
 /** Return a relative time string, e.g. "2 days ago", "just now", "in 3 hours" */
 export function relativeTime(value: number | string): string {
   const d = typeof value === 'number'

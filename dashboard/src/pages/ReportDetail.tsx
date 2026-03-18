@@ -2,18 +2,12 @@ import { useEffect, useState } from 'preact/hooks';
 import { getDomainReport } from '../api';
 import type { DayReport, ReportSource } from '../types';
 import { useIsMobile } from '../hooks';
+import { formatDateWithRelative } from '../utils/dates';
 
 interface Props {
   domainId: number;
   date: string;
   onUnauthorized: () => void;
-}
-
-function formatDate(iso: string): string {
-  const [y, m, d] = iso.split('-').map(Number);
-  return new Date(y, m - 1, d).toLocaleDateString('en-US', {
-    weekday: 'long', month: 'long', day: 'numeric',
-  });
 }
 
 function serviceVia(src: ReportSource): string | null {
@@ -91,7 +85,7 @@ export function ReportDetail({ domainId, date, onUnauthorized }: Props) {
       <a href={`#/domains/${domainId}`} style={s.back}>← {domain}</a>
 
       <div style={s.pageHeader}>
-        <h2 style={s.title}>{formatDate(date)}</h2>
+        <h2 style={s.title}>{formatDateWithRelative(date)}</h2>
         <p style={{ ...s.hero, color: failing.length > 0 ? '#dc2626' : '#16a34a' }}>{hero}</p>
       </div>
 
