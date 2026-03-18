@@ -107,8 +107,11 @@ export function ReportDetail({ domainId, date, onUnauthorized }: Props) {
                 <div key={`${src.source_ip}-${src.header_from}`} style={s.failCard}>
                   <div style={{ ...s.cardTop, flexWrap: 'wrap' }}>
                     <div style={s.cardLeft}>
-                      <code style={s.ip}>{src.source_ip}</code>
-                      {(src.org || src.base_domain) && <span style={s.via}>{src.org ?? src.base_domain}</span>}
+                      {(src.org || src.base_domain)
+                        ? <span style={s.providerName}>{src.org ?? src.base_domain}</span>
+                        : <code style={s.ip}>{src.source_ip}</code>
+                      }
+                      {(src.org || src.base_domain) && <code style={s.ipSub}>{src.source_ip}</code>}
                       {via && <span style={s.via}>via {via}</span>}
                       {src.header_from && <span style={s.sendingAs}>sending as {src.header_from}</span>}
                     </div>
@@ -141,8 +144,11 @@ export function ReportDetail({ domainId, date, onUnauthorized }: Props) {
                 <div key={`${src.source_ip}-${src.header_from}`} style={s.passRow}>
                   <span style={s.passCheck}>✓</span>
                   <div style={{ ...s.passInfo, flexWrap: 'wrap' }}>
-                    <code style={s.ip}>{src.source_ip}</code>
-                    {(src.org || src.base_domain) && <span style={s.via}>{src.org ?? src.base_domain}</span>}
+                    {(src.org || src.base_domain)
+                      ? <span style={s.providerName}>{src.org ?? src.base_domain}</span>
+                      : <code style={s.ip}>{src.source_ip}</code>
+                    }
+                    {(src.org || src.base_domain) && <code style={s.ipSub}>{src.source_ip}</code>}
                     {via && <span style={s.via}>via {via}</span>}
                   </div>
                   <span style={s.passCount}>{src.count.toLocaleString()} msg</span>
@@ -186,6 +192,8 @@ const s = {
   cardLeft: { display: 'flex', flexDirection: 'column' as const, gap: '0.2rem' },
   cardRight: { display: 'flex', flexDirection: 'column' as const, alignItems: 'flex-end', flexShrink: 0 },
   ip: { fontFamily: 'monospace', fontSize: '0.875rem', color: '#111827' } as const,
+  providerName: { fontSize: '0.9rem', fontWeight: 600, color: '#111827' } as const,
+  ipSub: { fontFamily: 'monospace', fontSize: '0.75rem', color: '#9ca3af' } as const,
   via: { fontSize: '0.75rem', color: '#6b7280' } as const,
   sendingAs: { fontSize: '0.75rem', color: '#9ca3af' } as const,
   msgCount: { fontSize: '1.25rem', fontWeight: 700, color: '#111827', lineHeight: 1 } as const,
