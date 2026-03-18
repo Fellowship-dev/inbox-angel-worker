@@ -1,0 +1,20 @@
+{
+  "name": "inbox-angel-worker",
+  "image": "mcr.microsoft.com/devcontainers/base:bullseye",
+  "workspaceFolder": "/workspaces/inbox-angel-worker",
+  "remoteUser": "vscode",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": { "version": "20" },
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/sshd:1": {}
+  },
+  "containerEnv": {
+    "NODE_ENV": "development"
+  },
+  "postCreateCommand": "npm install && npm install -g wrangler @anthropic-ai/claude-code && echo 'Ready!'",
+  "forwardPorts": [8787, 5173],
+  "portsAttributes": {
+    "8787": { "label": "Wrangler dev", "onAutoForward": "ignore" },
+    "5173": { "label": "Dashboard dev", "onAutoForward": "ignore" }
+  }
+}

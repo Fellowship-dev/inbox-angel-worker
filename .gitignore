@@ -221,3 +221,10 @@ sweep.yaml
 .plandex/
 .gpteng/
 .mentat-config.json
+
+# Spec-Kit (Fellowship-dev)
+.specify/
+specs/
+
+# Codespaces bootstrap (local-only, syncs gitignored AI tooling)
+.devcontainer/bootstrap-remote.sh
